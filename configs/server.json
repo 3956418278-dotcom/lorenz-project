@@ -1,0 +1,45 @@
+{
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-7,
+    "atol": 1e-10
+  },
+  "T_spinup": 100.0,
+  "n_phase": 64,
+  "n_seed": null,
+  "n_cycle_min": 100,
+  "target_average_time": 1000.0,
+  "amplitudes": [0.1, 0.07, 0.05, 0.035],
+  "frequencies": [],
+  "fourier_kmax": 6,
+  "bootstrap_samples": 500,
+  "random_seed": 12345,
+  "steady": {
+    "n_skips": [2, 4, 6, 8, 10, 15, 20, 30, 40, 60, 80],
+    "check_amplitude": 0.05,
+    "block_cycles": 8,
+    "n_blocks": 4,
+    "z_threshold": 2.0,
+    "rtol": 0.05,
+    "atol": 0.0,
+    "min_consecutive": 3
+  },
+  "spectrum": {
+    "T": 1000.0,
+    "density": 20,
+    "segment_time": 200.0,
+    "f_min": 0.01,
+    "prominence": 0.02,
+    "top_n": 8
+  },
+  "boundary": {
+    "ratio_thresholds": [0.05, 0.1, 0.2],
+    "directions": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    "test_amplitudes": [0.12]
+  }
+}

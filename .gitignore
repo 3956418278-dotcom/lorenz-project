@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+
+cache/*
+!cache/spinup/
+!cache/phase_samples/
+!cache/spinup/.gitkeep
+!cache/phase_samples/.gitkeep
+
+results/runs/*
+!results/runs/.gitkeep
+
+results/packages/*
+!results/packages/.gitkeep
