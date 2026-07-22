@@ -1,0 +1,11 @@
+{
+  "task": "response",
+  "confidence_level": 0.95,
+  "fit_degrees": [0, 1, 2],
+  "selection_metric": "loo_rmse",
+  "bootstrap_samples": 500,
+  "random_seed": 12345,
+  "amplitude_min": 0.01,
+  "amplitude_max": 0.16,
+  "fourier_kmax": 6
+}

@@ -1,0 +1,6 @@
+{
+  "task": "frequency-scan",
+  "confidence_level": 0.9,
+  "harmonics": [0, 1, 2],
+  "norm": "frobenius"
+}

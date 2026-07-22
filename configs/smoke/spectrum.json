@@ -1,0 +1,14 @@
+{
+  "base_config": "base.json",
+  "task": "spectrum",
+  "n_record_samples": 256,
+  "sample_rate": 8.0,
+  "fft_length": 128,
+  "welch_segment_length": 64,
+  "welch_overlap_samples": 32,
+  "f_min": 0.03,
+  "prominence": 0.01,
+  "top_n": 2,
+  "target_omegas": [1.0],
+  "combination_omegas": []
+}

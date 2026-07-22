@@ -4,6 +4,8 @@ __pycache__/
 cache/*
 !cache/spinup/
 !cache/phase_samples/
+cache/spinup/*
+cache/phase_samples/*
 !cache/spinup/.gitkeep
 !cache/phase_samples/.gitkeep
 

@@ -1,0 +1,12 @@
+{
+  "base_config": "base.json",
+  "task": "amplitude-scan",
+  "amplitudes": [0.2, 0.1, 0.05, 0.025],
+  "phase": 0.0,
+  "n_phase": 8,
+  "n_record_cycles": 4,
+  "n_record_samples": 32,
+  "fourier_kmax": 3,
+  "forcing_directions": [0, 1, 2],
+  "mixed_pairs": [[0, 1], [0, 2], [1, 2]]
+}

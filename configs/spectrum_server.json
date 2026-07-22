@@ -1,0 +1,20 @@
+{
+  "base_config": "base_server.json",
+  "task": "spectrum",
+  "n_record_samples": 65536,
+  "sample_rate": 32.0,
+  "fft_length": 16384,
+  "welch_segment_length": 8192,
+  "welch_overlap_samples": 4096,
+  "f_min": 0.01,
+  "prominence": 0.02,
+  "top_n": 8,
+  "target_omegas": [],
+  "combination_omegas": [],
+  "sampling_rationale": {
+    "n_record_samples": "2^16 post-spinup samples provide a 2048-time-unit record.",
+    "fft_length": "2^14 sets frequency resolution to sample_rate/fft_length.",
+    "welch_segment_length": "2^13 balances variance reduction and peak resolution.",
+    "welch_overlap_samples": "50 percent overlap is explicit."
+  }
+}

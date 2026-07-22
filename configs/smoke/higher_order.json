@@ -1,0 +1,8 @@
+{
+  "task": "higher-order",
+  "confidence_level": 0.9,
+  "norms": ["phase_l2", "per_output", "per_harmonic", "overall"],
+  "harmonics": [0, 1, 2, 3],
+  "bootstrap_samples": 10,
+  "random_seed": 234
+}

@@ -1,0 +1,17 @@
+{
+  "base_config": "base_server.json",
+  "task": "amplitude-scan",
+  "amplitudes": [0.16, 0.08, 0.04, 0.02, 0.01],
+  "phase": 0.0,
+  "n_phase": 64,
+  "n_record_cycles": 128,
+  "n_record_samples": 8192,
+  "fourier_kmax": 6,
+  "forcing_directions": [0, 1, 2],
+  "mixed_pairs": [[0, 1], [0, 2], [1, 2]],
+  "sampling_rationale": {
+    "amplitudes": "Five geometric levels separate truncation trends from the small-amplitude noise floor.",
+    "n_record_cycles": "2^7 complete forcing periods; phase bins and the raw conceptual FFT grid are exactly aligned.",
+    "n_record_samples": "n_phase*n_record_cycles=2^13, so the post-transient record length is a power of two."
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "base_config": "base_server.json",
+  "task": "sampling-check",
+  "n_seed": 4,
+  "frequencies": [1.0],
+  "amplitudes": [0.08, 0.04],
+  "check_forcing": [1.0, 0.0, 0.0],
+  "phase": 0.0,
+  "n_skip": 8,
+  "fourier_kmax": 6,
+  "relative_tolerance": 0.05,
+  "reference": {
+    "rtol": 1e-10,
+    "atol": 1e-13,
+    "T_spinup": 256.0,
+    "n_phase": 128,
+    "n_cycle": 128,
+    "n_record_samples": 65536,
+    "sample_rate": 32.0,
+    "fft_length": 16384,
+    "welch_segment_length": 4096,
+    "welch_overlap_samples": 2048
+  },
+  "scan": {
+    "rtol": [1e-6, 1e-8, 1e-10],
+    "atol": [1e-9, 1e-11, 1e-13],
+    "T_spinup": [64.0, 128.0, 256.0],
+    "n_phase": [32, 64, 128],
+    "n_cycle": [32, 64, 128],
+    "fft_length": [4096, 8192, 16384],
+    "welch_segment_length": [1024, 2048, 4096]
+  },
+  "spectral_evaluation_frequencies": [0.015625, 0.03125, 0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+}

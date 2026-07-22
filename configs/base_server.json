@@ -1,0 +1,20 @@
+{
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-8,
+    "atol": 1e-11
+  },
+  "T_spinup": 128.0,
+  "n_seed": 46,
+  "confidence_level": 0.95,
+  "design_notes": {
+    "n_seed": "46 independent initial-condition seeds; task parallelism is by seed.",
+    "T_spinup": "Candidate selected for formal runs; verify with sampling_check_server.json before interpretation.",
+    "solver": "Candidate DOP853 tolerances; sampling-check recommendations are advisory and never auto-applied."
+  }
+}
