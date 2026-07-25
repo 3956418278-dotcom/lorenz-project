@@ -144,7 +144,7 @@ def compute_complex_fft_statistics(samples: np.ndarray, fs: float) -> tuple[np.n
 
 def add_run_caption(fig: plt.Figure, run_info: dict[str, float | int]) -> None:
     caption = (
-        f"N_TRAJ={run_info['N_TRAJ']}, FS={run_info['FS']}, "
+        f"SEED={run_info['SEED']}, N_TRAJ={run_info['N_TRAJ']}, FS={run_info['FS']}, "
         f"SPINUP_TIME={run_info['SPINUP_TIME']}, EFFECTIVE_TIME={run_info['EFFECTIVE_TIME']}, "
         f"RK4_SUBSTEPS={run_info['RK4_SUBSTEPS']}"
     )
@@ -168,17 +168,27 @@ def plot_spectrum(
 
     fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
     for axis_index, (ax, label) in enumerate(zip(axes, labels)):
-        ax.plot(freq[mask], std_q[axis_index, mask], linewidth=0.8, label="std_Q")
+        ax.plot(
+            freq[mask],
+            std_q[axis_index, mask] / np.sqrt(run_info["N_TRAJ"]),
+            linewidth=0.7,
+            color="C0",
+            label="std_Q / sqrt(N_TRAJ)",
+            zorder=2,
+        )
         ax.plot(
             freq[mask],
             np.abs(mean_q[axis_index, mask]),
             linewidth=0.8,
+            color="C1",
+            alpha=0.75,
             label="abs(mean_Q)",
+            zorder=1,
         )
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_title(f"{label} direction")
-        ax.set_ylabel("Std. of complex FFT coefficients")
+        ax.set_ylabel("FFT coefficient amplitude")
         ax.grid(True, which="both", alpha=0.25)
         ax.legend()
 
@@ -234,6 +244,13 @@ def write_outputs(
         f.write("\n")
 
 
+def parse_seed_list(value: str) -> list[int]:
+    seeds = [int(item.strip()) for item in value.split(",") if item.strip()]
+    if not seeds:
+        raise argparse.ArgumentTypeError("--seeds must contain at least one integer seed")
+    return seeds
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compute unforced Lorenz-63 x/y/z natural spectra from complex FFT coefficients."
@@ -244,12 +261,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--effective-time", type=float, default=EFFECTIVE_TIME)
     parser.add_argument("--rk4-substeps", type=int, default=RK4_SUBSTEPS)
     parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument(
+        "--seeds",
+        type=parse_seed_list,
+        default=None,
+        help="Optional comma-separated seeds, e.g. --seeds 0,1,2. Each seed writes to output-dir/seed_<seed>/.",
+    )
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
+def run_seed(args: argparse.Namespace, seed: int, output_dir: Path) -> None:
     start = time.perf_counter()
 
     samples = integrate_samples(
@@ -258,7 +280,7 @@ def main() -> None:
         spinup_time=args.spinup_time,
         effective_time=args.effective_time,
         rk4_substeps=args.rk4_substeps,
-        seed=args.seed,
+        seed=seed,
     )
     freq, mean_q, std_q = compute_complex_fft_statistics(samples, args.fs)
 
@@ -270,19 +292,34 @@ def main() -> None:
         "EFFECTIVE_TIME": args.effective_time,
         "N_SAMPLES": samples.shape[-1],
         "RK4_SUBSTEPS": args.rk4_substeps,
-        "SEED": args.seed,
+        "SEED": seed,
         "elapsed_seconds": elapsed_seconds,
     }
     write_outputs(
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         freq=freq,
         mean_q=mean_q,
         std_q=std_q,
         run_info=run_info,
     )
 
-    print(f"Wrote outputs to {args.output_dir}")
+    print(f"Wrote outputs to {output_dir}")
     print(f"std_Q shape: {std_q.shape}")
+
+
+def main() -> None:
+    args = parse_args()
+    if args.seeds is None:
+        run_seed(args, args.seed, args.output_dir)
+        return
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    for seed in args.seeds:
+        run_seed(args, seed, args.output_dir / f"seed_{seed}")
+
+    with (args.output_dir / "multi_seed_run_info.json").open("w", encoding="utf-8") as f:
+        json.dump({"SEEDS": args.seeds}, f, indent=2, sort_keys=True)
+        f.write("\n")
 
 
 if __name__ == "__main__":
