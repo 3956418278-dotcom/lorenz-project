@@ -8,7 +8,7 @@ coefficients across trajectories.
 """
 
 from __future__ import annotations
-
+from datetime import datetime
 import argparse
 import json
 import os
@@ -32,8 +32,9 @@ FS = 16.0
 SPINUP_TIME = 60.0
 EFFECTIVE_TIME = 4096.0
 N_TRAJ = 4096
-SEED = 0
-RK4_SUBSTEPS = 4
+SEED = 123456789      
+##############################################################################
+RK4_SUBSTEPS = 8
 OUTPUT_DIR = Path("outputs/unforced_xyz_spectrum")
 
 SIGMA = 10.0
@@ -211,9 +212,9 @@ def write_outputs(
     run_info: dict[str, float | int],
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-
+    run_tag = make_run_tag(run_info)
     np.savez(
-        output_dir / "spectrum_data.npz",
+        output_dir / f"spectrum_data_{run_tag}.npz",
         freq=freq,
         std_x=std_q[0],
         std_y=std_q[1],
@@ -228,22 +229,38 @@ def write_outputs(
         mean_q=mean_q,
         std_q=std_q,
         run_info=run_info,
-        output_path=output_dir / "spectrum_full.png",
+        output_path=output_dir / f"spectrum_full_{run_tag}.png"
     )
     plot_spectrum(
         freq=freq,
         mean_q=mean_q,
         std_q=std_q,
         run_info=run_info,
-        output_path=output_dir / "spectrum_zoom_0p5_4Hz.png",
+        output_path=output_dir / f"spectrum_zoom_0p5_4Hz_{run_tag}.png",
         zoom=(0.5, 4.0),
     )
 
-    with (output_dir / "run_info.json").open("w", encoding="utf-8") as f:
+    with (output_dir / f"run_info_{run_tag}.json").open("w", encoding="utf-8") as f:
         json.dump(run_info, f, indent=2, sort_keys=True)
         f.write("\n")
 
+def filename_number(value: float | int) -> str:
+    """Convert a numeric parameter to a compact filename-safe string."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).replace(".", "p")
 
+
+def make_run_tag(run_info: dict[str, float | int]) -> str:
+
+    return (
+        f"seed{run_info['SEED']}"
+        f"_ntraj{run_info['N_TRAJ']}"
+        f"_fs{filename_number(run_info['FS'])}"
+        f"_spin{filename_number(run_info['SPINUP_TIME'])}"
+        f"_time{filename_number(run_info['EFFECTIVE_TIME'])}"
+        f"_rk4sub{run_info['RK4_SUBSTEPS']}"
+    )
 def parse_seed_list(value: str) -> list[int]:
     seeds = [int(item.strip()) for item in value.split(",") if item.strip()]
     if not seeds:
@@ -316,8 +333,11 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for seed in args.seeds:
         run_seed(args, seed, args.output_dir / f"seed_{seed}")
-
-    with (args.output_dir / "multi_seed_run_info.json").open("w", encoding="utf-8") as f:
+    seed_tag = "-".join(str(seed) for seed in args.seeds)
+    with (
+        args.output_dir / f"multi_seed_run_info_seeds{seed_tag}.json"
+            
+    ).open("w", encoding="utf-8") as f:
         json.dump({"SEEDS": args.seeds}, f, indent=2, sort_keys=True)
         f.write("\n")
 
