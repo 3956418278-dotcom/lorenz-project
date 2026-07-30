@@ -108,22 +108,63 @@ def _prepare_inputs(task, args, cfg):
             forced_sampling_metadata(omega, cfg) for omega in cfg["frequencies"]
         ]
     elif task == "amplitude-scan":
-        run_dir, manifest, result = storage.require_run(args.steady_run, "steady")
-        parents["steady"] = args.steady_run
-        paths["steady"] = _input_path(args.steady_run)
-        inputs["steady"] = result
-        parent_cfg = _read_parent_config(run_dir)
-        _require_compatible(cfg, parent_cfg, ("lorenz", "solver", "n_phase"), "steady")
-        cfg["frequencies"] = [float(value) for value in result["frequencies"]]
-        n_skip = {}
-        for omega in cfg["frequencies"]:
-            recommendation = result["recommendations"][str(float(omega))]
-            if not recommendation["converged"]:
+        if args.steady_run:
+            run_dir, manifest, result = storage.require_run(args.steady_run, "steady")
+            parents["steady"] = args.steady_run
+            paths["steady"] = _input_path(args.steady_run)
+            inputs["steady"] = result
+            parent_cfg = _read_parent_config(run_dir)
+            _require_compatible(cfg, parent_cfg, ("lorenz", "solver", "n_phase"), "steady")
+            cfg["frequencies"] = [float(value) for value in result["frequencies"]]
+            n_skip = {}
+            n_skip_source = {}
+            for omega in cfg["frequencies"]:
+                recommendation = result["recommendations"][str(float(omega))]
+                if not recommendation["converged"]:
+                    if not cfg.get("allow_unconverged_steady", False):
+                        raise ValueError(
+                            f"steady run {args.steady_run} has no converged n_skip "
+                            f"for omega={omega}"
+                        )
+                    fallback = cfg.get("fallback_n_skip")
+                    if fallback is None:
+                        fallback = max(int(value) for value in result["candidate_n_skip"])
+                    n_skip[str(float(omega))] = int(fallback)
+                    n_skip_source[str(float(omega))] = {
+                        "kind": "configured_fallback_after_unconverged_steady",
+                        "steady_run": args.steady_run,
+                        "stable_flags": recommendation.get("stable_flags", []),
+                        "max_relative_delta": recommendation.get("max_relative_delta", []),
+                    }
+                else:
+                    n_skip[str(float(omega))] = int(recommendation["recommended_n_skip"])
+                    n_skip_source[str(float(omega))] = {
+                        "kind": "steady_recommendation",
+                        "steady_run": args.steady_run,
+                    }
+            cfg["n_skip_by_frequency"] = n_skip
+            cfg["n_skip_source"] = n_skip_source
+        else:
+            if not cfg.get("frequencies") or not cfg.get("n_skip_by_frequency"):
                 raise ValueError(
-                    f"steady run {args.steady_run} has no converged n_skip for omega={omega}"
+                    "amplitude-scan requires --steady-run unless config provides "
+                    "explicit frequencies and n_skip_by_frequency"
                 )
-            n_skip[str(float(omega))] = int(recommendation["recommended_n_skip"])
-        cfg["n_skip_by_frequency"] = n_skip
+            cfg["frequencies"] = [float(value) for value in cfg["frequencies"]]
+            n_skip = {}
+            for omega in cfg["frequencies"]:
+                key = str(float(omega))
+                if key not in cfg["n_skip_by_frequency"]:
+                    raise ValueError(f"missing n_skip_by_frequency entry for omega={omega}")
+                n_skip[key] = int(cfg["n_skip_by_frequency"][key])
+            cfg["n_skip_by_frequency"] = n_skip
+            cfg["n_skip_source"] = {
+                str(float(omega)): {
+                    "kind": "explicit_configuration",
+                    "reason": cfg.get("n_skip_rationale", ""),
+                }
+                for omega in cfg["frequencies"]
+            }
         cfg["sampling_metadata"] = [
             forced_sampling_metadata(omega, cfg) for omega in cfg["frequencies"]
         ]
@@ -296,7 +337,7 @@ def main(argv=None):
 
     amplitude = subparsers.add_parser("amplitude-scan")
     _add_common(amplitude)
-    amplitude.add_argument("--steady-run", required=True)
+    amplitude.add_argument("--steady-run")
 
     response = subparsers.add_parser("response")
     _add_common(response)

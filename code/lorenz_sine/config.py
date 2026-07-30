@@ -85,6 +85,9 @@ def _validate_common(cfg: dict, require_dynamics=True) -> None:
     confidence = float(cfg.get("confidence_level", 0.95))
     if not 0.0 < confidence < 1.0:
         raise ValueError("confidence_level must lie strictly between zero and one")
+    alpha = float(cfg.get("significance_alpha", 0.05))
+    if not 0.0 < alpha < 1.0:
+        raise ValueError("significance_alpha must lie strictly between zero and one")
 
 
 def _validate_forced_sampling(cfg: dict) -> None:
@@ -125,6 +128,45 @@ def _validate_spectrum(cfg: dict) -> None:
         raise ValueError("welch_overlap_samples must be in [0, welch_segment_length)")
     if float(cfg["sample_rate"]) <= 0:
         raise ValueError("sample_rate must be positive")
+    peak = cfg.get("peak_significance", {})
+    if peak:
+        if peak.get("peak_power", "nearest_bin") not in ("nearest_bin", "window_max"):
+            raise ValueError(
+                "peak_significance.peak_power must be nearest_bin or window_max"
+            )
+        for key in ("peak_window_bins", "exclude_bins"):
+            if int(peak.get(key, 0)) < 0:
+                raise ValueError(f"peak_significance.{key} must be non-negative")
+        if int(peak.get("background_bins", 1)) <= 0:
+            raise ValueError("peak_significance.background_bins must be positive")
+        if float(peak.get("psd_floor", 1e-300)) <= 0.0:
+            raise ValueError("peak_significance.psd_floor must be positive")
+        if int(peak.get("harmonic_count", 0)) < 0:
+            raise ValueError("peak_significance.harmonic_count must be non-negative")
+        for key in ("target_frequencies", "fundamental_frequencies"):
+            if any(float(value) <= 0.0 for value in peak.get(key, [])):
+                raise ValueError(f"peak_significance.{key} entries must be positive")
+        for band in peak.get("target_frequency_bands", []):
+            if isinstance(band, dict):
+                low = float(band["min"])
+                high = float(band["max"])
+            else:
+                if len(band) != 2:
+                    raise ValueError(
+                        "peak_significance.target_frequency_bands entries "
+                        "must be [min, max] or objects with min/max"
+                    )
+                low = float(band[0])
+                high = float(band[1])
+            if low <= 0.0 or high <= low:
+                raise ValueError(
+                    "peak_significance.target_frequency_bands must have 0 < min < max"
+                )
+        fraction = float(peak.get("discovery_seed_fraction", 0.5))
+        if not 0.0 < fraction < 1.0:
+            raise ValueError(
+                "peak_significance.discovery_seed_fraction must lie strictly between zero and one"
+            )
 
 
 def _validate_sampling_check(cfg: dict) -> None:
@@ -177,6 +219,14 @@ def _validate_amplitude_scan(cfg: dict) -> None:
     _require(cfg, ["amplitudes", "n_phase", "n_record_cycles",
                    "n_record_samples", "fourier_kmax", "phase",
                    "forcing_directions", "mixed_pairs"])
+    if cfg.get("frequencies") is not None:
+        _validate_frequencies(cfg["frequencies"], allow_empty=True)
+    if cfg.get("n_skip_by_frequency"):
+        for key, value in cfg["n_skip_by_frequency"].items():
+            if float(key) <= 0.0 or int(value) < 0:
+                raise ValueError(
+                    "n_skip_by_frequency must map positive omega to non-negative n_skip"
+                )
     _validate_forced_sampling(cfg)
     amplitudes = [float(value) for value in cfg["amplitudes"]]
     if not amplitudes or any(value <= 0 for value in amplitudes):
@@ -185,13 +235,18 @@ def _validate_amplitude_scan(cfg: dict) -> None:
         raise ValueError("amplitudes must be unique")
     if any(int(direction) not in (0, 1, 2) for direction in cfg["forcing_directions"]):
         raise ValueError("forcing_directions entries must be 0, 1, or 2")
-    if set(int(value) for value in cfg["forcing_directions"]) != {0, 1, 2}:
-        raise ValueError("response estimation requires forcing_directions [0, 1, 2]")
+    if not cfg["forcing_directions"]:
+        raise ValueError("forcing_directions must be non-empty")
     valid_pairs = {(0, 1), (0, 2), (1, 2)}
-    if any(tuple(pair) not in valid_pairs for pair in cfg["mixed_pairs"]):
+    mixed_pairs = [tuple(pair) for pair in cfg["mixed_pairs"]]
+    if any(pair not in valid_pairs for pair in mixed_pairs):
         raise ValueError(f"mixed_pairs must be chosen from {sorted(valid_pairs)}")
-    if set(tuple(pair) for pair in cfg["mixed_pairs"]) != valid_pairs:
-        raise ValueError("response estimation requires all three mixed_pairs")
+    if len(set(mixed_pairs)) != len(mixed_pairs):
+        raise ValueError("mixed_pairs entries must be unique")
+    selected = set(int(value) for value in cfg["forcing_directions"])
+    for first, second in mixed_pairs:
+        if first not in selected or second not in selected:
+            raise ValueError("mixed_pairs must use configured forcing_directions")
 
 
 def _validate_response(cfg: dict) -> None:

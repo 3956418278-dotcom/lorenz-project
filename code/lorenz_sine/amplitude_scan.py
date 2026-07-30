@@ -10,7 +10,7 @@ from . import storage
 from .config import forced_sampling_metadata
 from .fourier import fourier_coefficients
 from .response import phase_mean_cached
-from .statistics import mean_se_ci, phase_l2, safe_ratio
+from .statistics import mean_se_ci, one_sample_t_test, phase_l2, safe_ratio
 
 
 def forcing_combinations(cfg):
@@ -96,6 +96,39 @@ def _leakage_ratio(coefficients, expected_harmonics):
     return safe_ratio(outside, total)
 
 
+def _target_harmonics(group: str, kmax: int):
+    if group == "odd":
+        return [k for k in range(1, kmax + 1) if k % 2 == 1]
+    if group == "even":
+        return [k for k in range(0, kmax + 1) if k % 2 == 0]
+    raise ValueError(f"unknown response group {group!r}")
+
+
+def _component_names(harmonic: int):
+    if int(harmonic) == 0:
+        return [(0, "dc")]
+    return [(0, "cos"), (1, "sin")]
+
+
+def _harmonic_class(group: str, harmonic: int) -> str:
+    harmonic = int(harmonic)
+    if group == "odd" and harmonic == 1:
+        return "first_order_fundamental"
+    if group == "even" and harmonic in (0, 2):
+        return "second_order_dc_or_second_harmonic"
+    return "tested_higher_harmonic"
+
+
+def _signed_fourier_tests(coefficients, cfg):
+    statistics = one_sample_t_test(
+        coefficients, cfg.get("confidence_level", 0.95), axis=2)
+    alpha = float(cfg.get("significance_alpha", 0.05))
+    statistics["significant"] = statistics["p_value"] < alpha
+    statistics["alpha"] = alpha
+    statistics["confidence_level"] = float(cfg.get("confidence_level", 0.95))
+    return statistics
+
+
 def _write_tables(run_dir, result, cfg):
     rows = []
     for omega_index, omega in enumerate(result["frequencies"]):
@@ -124,6 +157,74 @@ def _write_tables(run_dir, result, cfg):
          "even_l2", "odd_over_a_l2", "two_even_over_a2_l2",
          "odd_unexpected_harmonic_ratio", "even_unexpected_harmonic_ratio"],
         rows,
+    )
+    significance_rows = []
+    for omega_index, omega in enumerate(result["frequencies"]):
+        for amplitude_index, amplitude in enumerate(result["amplitudes"]):
+            for output in range(3):
+                for direction in cfg["forcing_directions"]:
+                    direction = int(direction)
+                    for group in ("odd", "even"):
+                        tests = result[f"{group}_fourier_t_test"]
+                        for harmonic in _target_harmonics(
+                                group, int(cfg["fourier_kmax"])):
+                            for component, component_name in _component_names(harmonic):
+                                significance_rows.append([
+                                    omega,
+                                    amplitude,
+                                    output,
+                                    direction,
+                                    group,
+                                    _harmonic_class(group, harmonic),
+                                    harmonic,
+                                    component_name,
+                                    tests["n"],
+                                    tests["mean"][omega_index, amplitude_index,
+                                                  output, direction,
+                                                  harmonic, component],
+                                    tests["std"][omega_index, amplitude_index,
+                                                 output, direction,
+                                                 harmonic, component],
+                                    tests["se"][omega_index, amplitude_index,
+                                                output, direction,
+                                                harmonic, component],
+                                    tests["t_statistic"][omega_index, amplitude_index,
+                                                         output, direction,
+                                                         harmonic, component],
+                                    tests["df"],
+                                    tests["p_value"][omega_index, amplitude_index,
+                                                     output, direction,
+                                                     harmonic, component],
+                                    tests["ci_low"][omega_index, amplitude_index,
+                                                    output, direction,
+                                                    harmonic, component],
+                                    tests["ci_high"][omega_index, amplitude_index,
+                                                     output, direction,
+                                                     harmonic, component],
+                                    bool(tests["significant"][omega_index,
+                                                              amplitude_index,
+                                                              output, direction,
+                                                              harmonic, component]),
+                                    tests["alpha"],
+                                    tests["confidence_level"],
+                                ])
+    storage.write_csv(
+        run_dir / "tables" / "signed_fourier_t_tests.csv",
+        ["omega", "amplitude", "output", "forcing_direction", "response_group",
+         "harmonic_class", "harmonic", "component", "n_seed", "sample_mean",
+         "sample_standard_deviation", "standard_error", "t_statistic",
+         "degrees_of_freedom", "two_sided_p_value", "ci_low", "ci_high",
+         "significant", "significance_alpha", "confidence_level"],
+        significance_rows,
+    )
+    storage.write_csv(
+        run_dir / "tables" / "signed_fft_t_tests.csv",
+        ["omega", "amplitude", "output", "forcing_direction", "response_group",
+         "harmonic_class", "harmonic", "component", "n_seed", "sample_mean",
+         "sample_standard_deviation", "standard_error", "t_statistic",
+         "degrees_of_freedom", "two_sided_p_value", "ci_low", "ci_high",
+         "significant", "significance_alpha", "confidence_level"],
+        significance_rows,
     )
     storage.write_json(run_dir / "data" / "sampling_metadata.json",
                        result["sampling_metadata"])
@@ -164,6 +265,14 @@ def _write_figures(run_dir, result, cfg):
                 pdf.savefig(fig)
                 plt.close(fig)
 
+    signed_paths = (
+        run_dir / "figures" / "signed_fourier_t_tests.pdf",
+        run_dir / "figures" / "signed_fft_t_tests.pdf",
+    )
+    for signed_path in signed_paths:
+        with PdfPages(signed_path) as pdf:
+            _write_signed_fft_pages(pdf, result, cfg, amplitudes, labels)
+
     harmonic_path = run_dir / "figures" / "amplitude_harmonics.pdf"
     with PdfPages(harmonic_path) as pdf:
         for omega_index, omega in enumerate(result["frequencies"]):
@@ -195,6 +304,56 @@ def _write_figures(run_dir, result, cfg):
                 axes[-1, 0].set_xlabel("amplitude")
                 axes[-1, 1].set_xlabel("amplitude")
                 fig.suptitle(f"omega={omega:.6g}, direction={direction}: aligned harmonics")
+                fig.tight_layout()
+                pdf.savefig(fig)
+                plt.close(fig)
+
+
+def _write_signed_fft_pages(pdf, result, cfg, amplitudes, labels):
+    import matplotlib.pyplot as plt
+
+    confidence = 100.0 * float(cfg.get("confidence_level", 0.95))
+    for omega_index, omega in enumerate(result["frequencies"]):
+        for direction in cfg["forcing_directions"]:
+            direction = int(direction)
+            for group in ("odd", "even"):
+                tests = result[f"{group}_fourier_t_test"]
+                targets = _target_harmonics(group, int(cfg["fourier_kmax"]))
+                if not targets:
+                    continue
+                fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+                for output, axis in enumerate(axes):
+                    for harmonic in targets:
+                        for component, component_name in _component_names(harmonic):
+                            mean = tests["mean"][omega_index, :, output,
+                                                 direction, harmonic, component]
+                            low = tests["ci_low"][omega_index, :, output,
+                                                  direction, harmonic, component]
+                            high = tests["ci_high"][omega_index, :, output,
+                                                   direction, harmonic, component]
+                            if group == "odd" and harmonic == 1:
+                                linewidth = 1.8
+                            elif group == "even" and harmonic in (0, 2):
+                                linewidth = 1.8
+                            else:
+                                linewidth = 0.9
+                            axis.plot(
+                                amplitudes,
+                                mean,
+                                marker="o",
+                                linewidth=linewidth,
+                                label=f"k={harmonic} {component_name}",
+                            )
+                            axis.fill_between(amplitudes, low, high, alpha=0.08)
+                    axis.axhline(0.0, color="black", linewidth=0.8)
+                    axis.set_ylabel(f"{labels[output]} coefficient")
+                    axis.legend(frameon=False, fontsize=7, ncol=3)
+                axes[-1].set_xlabel("forcing amplitude")
+                title = (
+                    f"omega={omega:.6g}, forcing direction={direction}, {group} response\n"
+                    f"signed FFT/Fourier coefficient seed mean and {confidence:.1f}% Student-t CI"
+                )
+                fig.suptitle(title)
                 fig.tight_layout()
                 pdf.savefig(fig)
                 plt.close(fig)
@@ -288,6 +447,8 @@ def run(cfg, run_dir, runtime, resume=False, client=None):
         })
     odd_fourier_seed = fourier_coefficients(odd, int(cfg["fourier_kmax"]))
     even_fourier_seed = fourier_coefficients(even, int(cfg["fourier_kmax"]))
+    odd_fourier_t_test = _signed_fourier_tests(odd_fourier_seed, cfg)
+    even_fourier_t_test = _signed_fourier_tests(even_fourier_seed, cfg)
     odd_harmonic_seed = np.sqrt(np.sum(odd_fourier_seed ** 2, axis=-1))
     even_harmonic_seed = np.sqrt(np.sum(even_fourier_seed ** 2, axis=-1))
     odd_harmonic_mean, odd_harmonic_se, odd_harmonic_low, odd_harmonic_high = mean_se_ci(
@@ -330,6 +491,10 @@ def run(cfg, run_dir, runtime, resume=False, client=None):
         **norm_statistics,
         "odd_fourier_seed": odd_fourier_seed,
         "even_fourier_seed": even_fourier_seed,
+        "odd_fourier_t_test": odd_fourier_t_test,
+        "even_fourier_t_test": even_fourier_t_test,
+        "odd_fft_t_test": odd_fourier_t_test,
+        "even_fft_t_test": even_fourier_t_test,
         "odd_harmonic_amplitude_seed": odd_harmonic_seed,
         "even_harmonic_amplitude_seed": even_harmonic_seed,
         "odd_harmonic_amplitude_mean": odd_harmonic_mean,

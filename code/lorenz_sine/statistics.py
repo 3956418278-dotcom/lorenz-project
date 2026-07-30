@@ -25,6 +25,44 @@ def mean_se_ci(values, confidence_level=0.95, axis=0):
     return mean, se, mean - half, mean + half
 
 
+def one_sample_t_test(values, confidence_level=0.95, axis=0):
+    """Two-sided one-sample Student t test of signed samples against zero."""
+    values = np.asarray(values, dtype=float)
+    n = int(values.shape[axis])
+    mean = values.mean(axis=axis)
+    df = n - 1
+    if n > 1:
+        std = values.std(axis=axis, ddof=1)
+        se = std / np.sqrt(n)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t_statistic = mean / se
+        zero_se = se == 0.0
+        t_statistic = np.asarray(t_statistic, dtype=float)
+        t_statistic[zero_se & (mean == 0.0)] = 0.0
+        nonzero_constant = zero_se & (mean != 0.0)
+        t_statistic[nonzero_constant] = np.sign(mean[nonzero_constant]) * np.inf
+        p_value = 2.0 * stats.t.sf(np.abs(t_statistic), df=df)
+        p_value = np.where(np.isinf(t_statistic), 0.0, p_value)
+        half = t_critical(confidence_level, n) * se
+    else:
+        std = np.full_like(mean, np.nan, dtype=float)
+        se = np.full_like(mean, np.nan, dtype=float)
+        t_statistic = np.full_like(mean, np.nan, dtype=float)
+        p_value = np.full_like(mean, np.nan, dtype=float)
+        half = np.full_like(mean, np.nan, dtype=float)
+    return {
+        "n": n,
+        "mean": mean,
+        "std": std,
+        "se": se,
+        "t_statistic": t_statistic,
+        "df": df,
+        "p_value": p_value,
+        "ci_low": mean - half,
+        "ci_high": mean + half,
+    }
+
+
 def phase_l2(values, axis=-1):
     return np.sqrt(np.mean(np.asarray(values, dtype=float) ** 2, axis=axis))
 

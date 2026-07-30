@@ -1,0 +1,31 @@
+{
+  "base_config": "forced_harmonic_local_base.json",
+  "task": "steady",
+  "frequencies": [
+    8.295768100885548,
+    16.453477930861386,
+    24.638799415019168,
+    32.95911120851088,
+    41.23033561679026,
+    49.53530760240312,
+    57.8280077417129,
+    66.1176399194469
+  ],
+  "candidate_n_skip": [8, 16, 32, 64],
+  "check_forcing": [0.0, 0.0, 0.04],
+  "phase": 0.0,
+  "n_phase": 64,
+  "block_cycles": 16,
+  "n_blocks": 3,
+  "n_record_cycles": 16,
+  "n_record_samples": 1024,
+  "fourier_kmax": 8,
+  "target_harmonics": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+  "convergence": {
+    "rtol": 0.5,
+    "atol": 0.05,
+    "scale_floor": 0.001,
+    "min_consecutive": 1,
+    "require_ci_contains_zero": false
+  }
+}

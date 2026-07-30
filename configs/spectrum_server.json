@@ -1,20 +1,45 @@
 {
   "base_config": "base_server.json",
   "task": "spectrum",
-  "n_record_samples": 65536,
+  "n_seed": 96,
+  "n_record_samples": 262144,
   "sample_rate": 32.0,
-  "fft_length": 16384,
-  "welch_segment_length": 8192,
-  "welch_overlap_samples": 4096,
+  "fft_length": 65536,
+  "welch_segment_length": 32768,
+  "welch_overlap_samples": 16384,
   "f_min": 0.01,
   "prominence": 0.02,
   "top_n": 8,
   "target_omegas": [],
   "combination_omegas": [],
+  "peak_significance": {
+    "enabled": true,
+    "peak_power": "nearest_bin",
+    "peak_window_bins": 0,
+    "exclude_bins": 3,
+    "background_bins": 24,
+    "include_detected_peaks": true,
+    "include_target_omegas": true,
+    "include_target_frequencies": true,
+    "target_frequencies": [],
+    "target_frequency_bands": [
+      {
+        "label": "around_2p63",
+        "min": 2.6,
+        "max": 2.66
+      }
+    ],
+    "fundamental_omegas": [],
+    "fundamental_frequencies": [],
+    "harmonic_count": 0,
+    "strict_split": false,
+    "discovery_seed_fraction": 0.5
+  },
   "sampling_rationale": {
-    "n_record_samples": "2^16 post-spinup samples provide a 2048-time-unit record.",
-    "fft_length": "2^14 sets frequency resolution to sample_rate/fft_length.",
-    "welch_segment_length": "2^13 balances variance reduction and peak resolution.",
+    "n_seed": "96 independent initial-condition seeds give the peak/background t tests materially smaller seed uncertainty than the shared 46-seed base config.",
+    "n_record_samples": "2^18 post-spinup samples provide an 8192-time-unit record at sample_rate=32.",
+    "fft_length": "2^16 sets the reported FFT frequency grid to 32/65536 = 0.00048828125.",
+    "welch_segment_length": "2^15 gives long local spectra while retaining 15 overlapping Welch segments per seed.",
     "welch_overlap_samples": "50 percent overlap is explicit."
   }
 }

@@ -1,10 +1,20 @@
 # Lorenz-63 Sinusoidal Response Workflow
 
-This repository estimates first- and second-order statistical response while
-separately testing sampling convergence, periodic steady state, higher-order
-contamination, detectability, and finite-amplitude truncation validity.  The
-old ratio-only `boundary.py` calculation is retired; configured ratios are
-reported only as decision diagnostics in the validation stage.
+This repository runs Lorenz-63 single-frequency sinusoidal forcing experiments
+and tests whether signed phase-Fourier response coefficients have nonzero
+finite-seed means.  The current minimal scientific chain is:
+
+```text
+steady -> amplitude-scan
+```
+
+`steady` chooses a post-transient skip for each forcing frequency.
+`amplitude-scan` then runs `M(0)`, `M(+A)`, and `M(-A)` for each configured
+single forcing direction, forms odd/even responses, projects them onto phase
+Fourier coefficients, and performs two-sided one-sample Student t tests across
+independent seeds.  The older response, higher-order, frequency-scan,
+validation, and report stages remain available as optional follow-up analysis,
+but they are not required for the signed-harmonic significance question.
 
 ## Repository partitions
 
@@ -85,6 +95,49 @@ python -m lorenz_sine.cli steady \
 python -m lorenz_sine.cli amplitude-scan \
   --config configs/amplitude_scan_server.json \
   --steady-run <steady_run_id>
+```
+
+The unforced `spectrum` stage also writes per-peak significance checks for
+the natural-spectrum candidates:
+
+```text
+results/runs/<spectrum_run_id>/tables/spectrum_peak_significance.csv
+results/runs/<spectrum_run_id>/figures/spectrum_peak_significance.pdf
+results/runs/<spectrum_run_id>/figures/spectrum_peak_significance.png
+```
+
+These tests use the saved per-seed Welch PSD array from the same spectrum
+run.  For each coordinate and candidate frequency, the sample is the
+per-seed log peak-to-background power ratio
+`log(P_peak / P_background)`.  The one-sided Student t test is
+`H0: E[D] <= 0` versus `H1: E[D] > 0`; FFT amplitudes, PSD values, frequency
+bins, and Welch windows are not treated as independent samples.
+
+By default, candidate peaks are the same peaks already detected from the
+mean unforced PSD, plus any configured target angular frequencies or
+harmonics.  This default is an exploratory test because the same seeds can be
+used both to choose and test peak locations.  Set
+`spectrum.peak_significance.strict_split=true` to use separate discovery and
+test seed subsets when the run has enough seeds.
+
+At this point the run already contains the required signed Fourier
+significance table and visual check:
+
+```text
+results/runs/<amplitude_run_id>/tables/signed_fft_t_tests.csv
+results/runs/<amplitude_run_id>/figures/signed_fft_t_tests.pdf
+results/runs/<amplitude_run_id>/data/result.npz
+```
+
+The same CSV/PDF are also written under `signed_fourier_t_tests.*` for the
+phase-Fourier naming used internally.
+
+Optional follow-up stages below are legacy/model-extrapolation analyses.  The
+`response` stage requires an amplitude-scan run that includes all three
+`mixed_pairs`; it is therefore not part of the minimal signed-harmonic
+significance run configured in `configs/amplitude_scan_server.json`.
+
+```bash
 
 python -m lorenz_sine.cli response \
   --config configs/response_server.json \
@@ -149,7 +202,33 @@ Adjacent-block differences and their confidence intervals drive an explicit,
 configurable plateau recommendation, which is also visualized for inspection.
 
 The amplitude stage saves paired `M(+A)`, `M(-A)`, and `M(0)` simulations and
-their odd/even decompositions.  The response stage fits all three models
+their odd/even decompositions:
+
+```text
+M_odd(A)  = (M(+A) - M(-A)) / 2
+M_even(A) = (M(+A) + M(-A) - 2 M(0)) / 2
+```
+
+The Fourier t tests use the signed coefficients for each fixed
+`omega/amplitude/output/forcing_direction/response_group/harmonic/component`.
+The seed axis is the sample axis.  The Fourier component axis is `dc` for
+`k=0` and signed `cos`/`sin` coefficients for `k>0`; Fourier moduli, absolute
+values, powers, and L2 norms are not used as t-test samples.  The tested
+harmonic sets are:
+
+- odd response: `k=1` for the fundamental first-order response and odd
+  `k>=3` for tested higher odd harmonics;
+- even response: `k=0` and `k=2` for second-order response and even `k>=4`
+  for tested higher even harmonics.
+
+Each CSV row reports the forcing frequency, forcing amplitude, output
+coordinate, forcing direction, odd/even response group, harmonic, Fourier
+component, number of seeds, sample mean, sample standard deviation, standard
+error, t statistic, degrees of freedom, two-sided p value, Student-t confidence
+interval, and significance flag.  `significance_alpha` defaults to `0.05` and
+is configurable independently of `confidence_level`.
+
+The existing response stage fits all three models
 
 ```text
 constant
@@ -216,18 +295,45 @@ results/runs/<run_id>/
 MPI ranks = desired workers + 2
 ```
 
-For the formal `n_seed=46` integration stages, 48 ranks provide 46 workers:
+For a non-smoke local medium run, first provide a spectrum parent run or edit
+`configs/significance_medium_steady.json` with frequencies selected from the
+unforced natural spectrum:
 
 ```bash
-bash scripts/run_spectrum_mpi.sh 48 configs/spectrum_server.json
+export PYTHONPATH="$PWD/code:${PYTHONPATH:-}"
+export PYTHONDONTWRITEBYTECODE=1
+export MPLBACKEND=Agg
+export MPLCONFIGDIR="$PWD/cache/matplotlib"
+
+python -m lorenz_sine.cli steady \
+  --config configs/significance_medium_steady.json \
+  --spectrum-run <spectrum_run_id>
+
+python -m lorenz_sine.cli amplitude-scan \
+  --config configs/significance_medium_amplitude_scan.json \
+  --steady-run <medium_steady_run_id>
+```
+
+For the formal unforced spectrum run, `configs/spectrum_server.json` uses
+`n_seed=96`; 98 MPI ranks provide 96 workers:
+
+```bash
+bash scripts/run_spectrum_mpi.sh 98 configs/spectrum_server.json
+```
+
+For the forced signed-harmonic significance stages that still use the shared
+`n_seed=46` base config, 48 ranks provide 46 workers:
+
+```bash
 bash scripts/run_steady_mpi.sh 48 configs/steady_server.json <spectrum_run_id>
 bash scripts/run_amplitude_scan_mpi.sh 48 configs/amplitude_scan_server.json <steady_run_id>
 ```
 
-Sampling-check defaults to six ranks for four worker slots.  Response,
-higher-order, frequency-scan, and validation are predominantly client-side
-post-processing; their MPI wrappers exist for consistent remote submission,
-but normally use only three ranks.  Run the consolidated report serially:
+Sampling-check defaults to six ranks for four worker slots.  Optional response,
+higher-order, frequency-scan, and validation stages are predominantly
+client-side post-processing; their MPI wrappers exist for consistent remote
+submission, but normally use only three ranks.  Run the optional consolidated
+report serially:
 
 ```bash
 bash scripts/run_report.sh configs/report_server.json <validation_run_id> \
@@ -255,6 +361,24 @@ directory; both success and failure paths package the available run state.
 
 ## Smoke workflow
 
-Use only `configs/smoke/` for local verification.  The smoke stages must still
-be invoked independently with explicit run IDs, exactly like the formal
-commands.  Do not use the formal server configs as smoke tests.
+Use `configs/smoke/` only for very fast local verification.  The smoke stages
+must still be invoked independently with explicit run IDs, exactly like the
+formal commands.  Do not use the formal server configs as smoke tests.
+
+```bash
+export PYTHONPATH="$PWD/code:${PYTHONPATH:-}"
+export PYTHONDONTWRITEBYTECODE=1
+export MPLBACKEND=Agg
+export MPLCONFIGDIR="$PWD/cache/matplotlib"
+
+python -m lorenz_sine.cli steady \
+  --config configs/smoke/steady.json
+
+python -m lorenz_sine.cli amplitude-scan \
+  --config configs/smoke/amplitude_scan.json \
+  --steady-run <smoke_steady_run_id>
+```
+
+The smoke `steady` config contains an explicit test frequency, so it does not
+need a spectrum parent run.  The smoke `amplitude-scan` uses only zero forcing
+and single-axis `+A/-A` pairs.

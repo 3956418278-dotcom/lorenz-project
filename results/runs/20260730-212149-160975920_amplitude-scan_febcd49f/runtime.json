@@ -1,0 +1,15 @@
+{
+  "cache": {
+    "hits": 7680,
+    "misses": 5632
+  },
+  "command": "/home/feng/lorenz_proj/code/lorenz_sine/cli.py amplitude-scan --config configs/forced_harmonic_formal_amplitude_scan.json --resume 20260730-212149-160975920_amplitude-scan_febcd49f",
+  "completed_at": "2026-07-30T21:37:41.994186",
+  "created_at": "2026-07-30T21:21:52.676844",
+  "elapsed_seconds": 949.2382056713104,
+  "execution_backend": "dask-mpi",
+  "stage_times": {
+    "amplitude-scan": 947.0800354480743
+  },
+  "worker_count": 5
+}

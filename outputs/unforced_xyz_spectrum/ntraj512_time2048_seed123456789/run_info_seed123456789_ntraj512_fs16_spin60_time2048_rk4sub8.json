@@ -1,0 +1,10 @@
+{
+  "EFFECTIVE_TIME": 2048.0,
+  "FS": 16.0,
+  "N_SAMPLES": 32768,
+  "N_TRAJ": 512,
+  "RK4_SUBSTEPS": 8,
+  "SEED": 123456789,
+  "SPINUP_TIME": 60.0,
+  "elapsed_seconds": 13.508157410999956
+}

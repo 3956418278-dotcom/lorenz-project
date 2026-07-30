@@ -1,0 +1,10 @@
+{
+  "fft_length": 65536,
+  "frequency_resolution": 0.00048828125,
+  "n_record_samples": 262144,
+  "nyquist_frequency": 16.0,
+  "record_duration": 8192.0,
+  "sample_rate": 32.0,
+  "welch_overlap_samples": 16384,
+  "welch_segment_length": 32768
+}

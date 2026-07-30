@@ -1,0 +1,16 @@
+{
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-7,
+    "atol": 1e-9
+  },
+  "T_spinup": 64.0,
+  "n_seed": 16,
+  "confidence_level": 0.95,
+  "significance_alpha": 0.05
+}

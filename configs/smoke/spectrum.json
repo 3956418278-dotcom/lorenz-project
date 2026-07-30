@@ -10,5 +10,18 @@
   "prominence": 0.01,
   "top_n": 2,
   "target_omegas": [1.0],
-  "combination_omegas": []
+  "combination_omegas": [],
+  "peak_significance": {
+    "enabled": true,
+    "peak_power": "nearest_bin",
+    "peak_window_bins": 0,
+    "exclude_bins": 1,
+    "background_bins": 4,
+    "include_detected_peaks": true,
+    "include_target_omegas": true,
+    "fundamental_omegas": [],
+    "harmonic_count": 0,
+    "strict_split": false,
+    "discovery_seed_fraction": 0.5
+  }
 }

@@ -1,0 +1,14 @@
+{
+  "base_config": "forced_harmonic_local_base.json",
+  "task": "amplitude-scan",
+  "amplitudes": [0.08, 0.04, 0.02, 0.01],
+  "phase": 0.0,
+  "n_phase": 64,
+  "n_record_cycles": 64,
+  "n_record_samples": 4096,
+  "fourier_kmax": 8,
+  "forcing_directions": [2],
+  "mixed_pairs": [],
+  "allow_unconverged_steady": true,
+  "fallback_n_skip": 64
+}
