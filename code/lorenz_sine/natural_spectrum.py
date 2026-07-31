@@ -14,6 +14,9 @@ from .response import get_spinup_state
 from .statistics import mean_se_ci
 
 
+COORDINATES = ("x", "y", "z")
+
+
 DEFAULT_PEAK_SIGNIFICANCE = {
     "enabled": True,
     "peak_power": "nearest_bin",
@@ -22,15 +25,10 @@ DEFAULT_PEAK_SIGNIFICANCE = {
     "background_bins": 8,
     "psd_floor": 1e-300,
     "include_detected_peaks": True,
-    "include_target_omegas": True,
-    "include_target_frequencies": True,
-    "target_frequencies": [],
-    "target_frequency_bands": [],
-    "fundamental_omegas": [],
-    "fundamental_frequencies": [],
-    "harmonic_count": 0,
-    "strict_split": False,
+    "predefined_target_frequencies": [],
+    "strict_split": True,
     "discovery_seed_fraction": 0.5,
+    "seed_split_strategy": "contiguous_seed_index",
 }
 
 
@@ -67,36 +65,116 @@ def _load_seed_checkpoint(path):
         return int(data["seed"]), data["freqs"], data["psd"], {"hits": 0, "misses": 0}
 
 
-def _peak_rows(freqs, combined, cfg):
+def _frequency_resolution(freqs):
+    freqs = np.asarray(freqs, dtype=float)
+    if freqs.ndim != 1 or freqs.size < 2:
+        raise ValueError("Welch frequency grid must be one-dimensional with at least two bins")
+    differences = np.diff(freqs)
+    if np.any(differences <= 0.0):
+        raise ValueError("Welch frequency grid must be strictly increasing")
+    resolution = float(np.median(differences))
+    if not np.allclose(differences, resolution, rtol=1e-8, atol=1e-12):
+        raise ValueError("Welch frequency grid must be uniformly spaced")
+    return resolution
+
+
+def _detect_peaks_by_coordinate(freqs, discovery_psd_mean, cfg):
+    """Detect and rank peaks independently on each discovery-seed mean PSD."""
+
+    freqs = np.asarray(freqs, dtype=float)
+    discovery_psd_mean = np.asarray(discovery_psd_mean, dtype=float)
+    if discovery_psd_mean.shape != (len(COORDINATES), freqs.size):
+        raise ValueError(
+            "discovery mean PSD must have shape "
+            f"({len(COORDINATES)}, {freqs.size})"
+        )
     base = np.flatnonzero(freqs >= float(cfg["f_min"]))
     if base.size == 0:
         raise ValueError("f_min leaves no analyzable Welch frequency bins")
-    work = combined[base]
-    peaks, properties = signal.find_peaks(
-        work / max(float(work.max()), 1e-300),
-        prominence=float(cfg["prominence"]),
+    resolution = _frequency_resolution(freqs)
+    minimum_distance_frequency = float(
+        cfg.get("peak_min_distance_frequency", 3.0 * resolution)
     )
-    if peaks.size == 0:
-        peaks = np.array([int(work.argmax())])
-        properties = {"prominences": np.array([np.nan])}
-    order = np.argsort(work[peaks])[::-1][:int(cfg["top_n"])]
-    resolution = float(freqs[1] - freqs[0]) if len(freqs) > 1 else np.nan
+    if minimum_distance_frequency <= 0.0:
+        raise ValueError("peak_min_distance_frequency must be positive")
+    minimum_distance_bins = max(
+        1, int(math.ceil(minimum_distance_frequency / resolution))
+    )
+    relative_prominence = float(cfg["prominence"])
+    if relative_prominence <= 0.0:
+        raise ValueError("prominence must be positive")
+    top_n = int(cfg["top_n"])
+    if top_n <= 0:
+        raise ValueError("top_n must be positive")
+
     rows = []
-    for rank, order_index in enumerate(order, 1):
-        local_index = int(peaks[order_index])
-        index = int(base[local_index])
-        frequency = float(freqs[index])
-        omega = 2.0 * math.pi * frequency
+    for coordinate_index, coordinate in enumerate(COORDINATES):
+        work = discovery_psd_mean[coordinate_index, base]
+        scale = max(float(np.max(work)), 1e-300)
+        local_peaks, properties = signal.find_peaks(
+            work,
+            prominence=relative_prominence * scale,
+            width=(None, None),
+        )
+        if local_peaks.size == 0:
+            continue
+
+        # SciPy's distance filter prioritizes peak height.  Here the scientific
+        # ranking variable is prominence, so perform the distance suppression
+        # in prominence order as well.
+        order = np.lexsort((
+            base[local_peaks],
+            -np.asarray(properties["prominences"], dtype=float),
+        ))
+        selected = []
+        for property_index in order:
+            global_bin = int(base[int(local_peaks[property_index])])
+            if any(
+                abs(global_bin - kept_bin) < minimum_distance_bins
+                for _, kept_bin in selected
+            ):
+                continue
+            selected.append((int(property_index), global_bin))
+            if len(selected) == top_n:
+                break
+
+        for rank, (property_index, global_bin) in enumerate(selected, start=1):
+            frequency = float(freqs[global_bin])
+            rows.append({
+                "coordinate": coordinate,
+                "rank": rank,
+                "frequency": frequency,
+                "omega": 2.0 * math.pi * frequency,
+                "bin": global_bin,
+                "psd_value": float(discovery_psd_mean[coordinate_index, global_bin]),
+                "prominence": float(properties["prominences"][property_index]),
+                "width": float(properties["widths"][property_index]),
+            })
+    return rows
+
+
+def _legacy_z_peak_array(detected_peaks, frequency_resolution):
+    """Keep the historical numeric ``peaks`` key sourced from formal z peaks."""
+
+    rows = []
+    for peak in detected_peaks:
+        if peak["coordinate"] != "z":
+            continue
+        half_width = 0.5 * float(peak["width"]) * float(frequency_resolution)
+        omega_low = 2.0 * math.pi * max(0.0, float(peak["frequency"]) - half_width)
+        omega_high = 2.0 * math.pi * (float(peak["frequency"]) + half_width)
         rows.append([
-            rank,
-            index,
-            frequency,
-            omega,
-            max(0.0, omega - 3.0 * 2.0 * math.pi * resolution),
-            omega + 3.0 * 2.0 * math.pi * resolution,
-            float(combined[index]),
-            float(properties["prominences"][order_index]),
+            int(peak["rank"]),
+            int(peak["bin"]),
+            float(peak["frequency"]),
+            float(peak["omega"]),
+            omega_low,
+            omega_high,
+            float(peak["psd_value"]),
+            float(peak["prominence"]),
         ])
+    if not rows:
+        return np.empty((0, 8), dtype=float)
     return np.asarray(rows, dtype=float)
 
 
@@ -108,8 +186,11 @@ def _peak_significance_cfg(cfg):
     options["exclude_bins"] = int(options["exclude_bins"])
     options["background_bins"] = int(options["background_bins"])
     options["psd_floor"] = float(options["psd_floor"])
-    if options["peak_power"] not in ("nearest_bin", "window_max"):
-        raise ValueError("peak_significance.peak_power must be nearest_bin or window_max")
+    if options["peak_power"] != "nearest_bin":
+        raise ValueError(
+            "peak_significance.peak_power must be nearest_bin so test seeds "
+            "cannot select a peak bin"
+        )
     if options["peak_window_bins"] < 0:
         raise ValueError("peak_significance.peak_window_bins must be non-negative")
     if options["exclude_bins"] < 0:
@@ -118,101 +199,111 @@ def _peak_significance_cfg(cfg):
         raise ValueError("peak_significance.background_bins must be positive")
     if options["psd_floor"] <= 0.0:
         raise ValueError("peak_significance.psd_floor must be positive")
-    if int(options.get("harmonic_count", 0)) < 0:
-        raise ValueError("peak_significance.harmonic_count must be non-negative")
-    options["strict_split"] = bool(options.get("strict_split", False))
+    targets = [
+        float(value)
+        for value in options.get("predefined_target_frequencies", [])
+    ]
+    if any(value <= 0.0 for value in targets):
+        raise ValueError(
+            "peak_significance.predefined_target_frequencies entries must be positive"
+        )
+    options["predefined_target_frequencies"] = targets
+    # A split is mandatory for this analysis.  Keep the field in saved
+    # metadata for compatibility with older configurations, but never permit
+    # same-seed discovery and testing.
+    options["strict_split"] = True
     options["discovery_seed_fraction"] = float(options["discovery_seed_fraction"])
     if not 0.0 < options["discovery_seed_fraction"] < 1.0:
         raise ValueError(
             "peak_significance.discovery_seed_fraction must lie strictly between zero and one"
         )
+    strategy = str(options.get("seed_split_strategy", "contiguous_seed_index"))
+    if strategy != "contiguous_seed_index":
+        raise ValueError(
+            "peak_significance.seed_split_strategy must be contiguous_seed_index"
+        )
+    options["seed_split_strategy"] = strategy
     return options
 
 
 def _candidate_peak_specs(freqs, peaks, cfg, options, reference_psd=None):
+    del reference_psd  # Combined PSD is intentionally never a candidate source.
     candidates = []
     seen = set()
 
-    def add(source, rank, target_frequency):
+    def add(coordinate, source, rank, target_frequency, bin_index=None):
         target_frequency = float(target_frequency)
         if target_frequency <= 0.0 or target_frequency > float(freqs[-1]):
             return
-        bin_index = int(np.argmin(np.abs(freqs - target_frequency)))
-        key = (source, str(rank), bin_index)
+        if bin_index is None:
+            bin_index = int(np.argmin(np.abs(freqs - target_frequency)))
+        else:
+            bin_index = int(bin_index)
+        key = (coordinate, source, str(rank), bin_index)
         if key in seen:
             return
         seen.add(key)
         candidates.append({
+            "coordinate": coordinate,
             "source": source,
             "peak_rank": rank,
             "target_frequency": target_frequency,
             "nearest_bin": bin_index,
         })
 
-    def add_band(rank, band):
-        if isinstance(band, dict):
-            band_min = float(band["min"])
-            band_max = float(band["max"])
-            label = band.get("label", f"band_{rank}")
-        else:
-            band_min = float(band[0])
-            band_max = float(band[1])
-            label = f"band_{rank}"
-        if band_min <= 0.0 or band_max <= band_min:
-            raise ValueError("target frequency bands must have 0 < min < max")
-        window = np.flatnonzero((freqs >= band_min) & (freqs <= band_max))
-        if window.size == 0:
-            return
-        if reference_psd is None:
-            selected_bin = int(window[window.size // 2])
-        else:
-            selected_bin = int(window[int(np.argmax(reference_psd[window]))])
-        key = ("target_frequency_band", str(label), int(window[0]), int(window[-1]))
-        if key in seen:
-            return
-        seen.add(key)
-        candidates.append({
-            "source": "target_frequency_band",
-            "peak_rank": label,
-            "target_frequency": float(0.5 * (band_min + band_max)),
-            "nearest_bin": selected_bin,
-            "window_start_bin": int(window[0]),
-            "window_stop_bin": int(window[-1]) + 1,
-            "target_band_min": band_min,
-            "target_band_max": band_max,
-            "select_peak_within_window": False,
-        })
-
     if options.get("include_detected_peaks", True):
         for row in peaks:
-            add("detected_peak", int(row[0]), float(row[2]))
-    if options.get("include_target_omegas", True):
-        for index, omega in enumerate(cfg.get("target_omegas", []), start=1):
-            add("target_omega", f"target_{index}", float(omega) / (2.0 * math.pi))
-    if options.get("include_target_frequencies", True):
-        for index, frequency in enumerate(options.get("target_frequencies", []), start=1):
-            add("target_frequency", f"target_f_{index}", float(frequency))
-        for index, band in enumerate(options.get("target_frequency_bands", []), start=1):
-            add_band(index, band)
-    harmonic_count = int(options.get("harmonic_count", 0))
-    for base_index, omega in enumerate(options.get("fundamental_omegas", []), start=1):
-        fundamental = float(omega) / (2.0 * math.pi)
-        for harmonic in range(1, harmonic_count + 1):
+            if isinstance(row, dict):
+                add(
+                    str(row["coordinate"]),
+                    "automatic_peak",
+                    int(row["rank"]),
+                    float(row["frequency"]),
+                    int(row["bin"]),
+                )
+            else:
+                # Compatibility for callers holding historical global peak
+                # arrays.  New formal analyses always pass coordinate rows.
+                for coordinate in COORDINATES:
+                    add(
+                        coordinate,
+                        "automatic_peak",
+                        int(row[0]),
+                        float(row[2]),
+                        int(row[1]),
+                    )
+    for index, frequency in enumerate(
+        options.get("predefined_target_frequencies", []), start=1
+    ):
+        for coordinate in COORDINATES:
             add(
-                "configured_harmonic",
-                f"omega{base_index}_k{harmonic}",
-                harmonic * fundamental,
-            )
-    for base_index, frequency in enumerate(
-        options.get("fundamental_frequencies", []), start=1):
-        fundamental = float(frequency)
-        for harmonic in range(1, harmonic_count + 1):
-            add(
-                "configured_frequency_harmonic",
-                f"f{base_index}_k{harmonic}",
-                harmonic * fundamental,
+                coordinate,
+                "predefined_target",
+                f"predefined_{index}",
+                float(frequency),
             )
     return candidates
+
+
+def _fixed_seed_split(n_seed, options):
+    n_seed = int(n_seed)
+    if n_seed < 2:
+        raise ValueError(
+            "peak discovery/significance requires at least two seeds for a "
+            "disjoint discovery/test split"
+        )
+    n_discovery = int(round(
+        n_seed * float(options["discovery_seed_fraction"])
+    ))
+    n_discovery = max(1, min(n_seed - 1, n_discovery))
+    discovery = np.arange(0, n_discovery, dtype=int)
+    test = np.arange(n_discovery, n_seed, dtype=int)
+    return {
+        "strategy": options["seed_split_strategy"],
+        "discovery_seed_fraction": float(options["discovery_seed_fraction"]),
+        "discovery_seed_indices": discovery,
+        "test_seed_indices": test,
+    }
 
 
 def _holm_adjust(p_values):
@@ -272,7 +363,15 @@ def _peak_background_slices(freqs, center_bin, options, window_start=None, windo
 
 def _log_peak_background_ratios(psd_seed, freqs, candidates, cfg, selection_mode):
     options = _peak_significance_cfg(cfg)
-    labels = ("x", "y", "z")
+    psd_seed = np.asarray(psd_seed, dtype=float)
+    freqs = np.asarray(freqs, dtype=float)
+    if psd_seed.ndim != 3 or psd_seed.shape[1:] != (
+        len(COORDINATES), freqs.size
+    ):
+        raise ValueError(
+            "test-seed PSD must have shape "
+            f"(n_test_seed, {len(COORDINATES)}, {freqs.size})"
+        )
     confidence = float(cfg.get("confidence_level", 0.95))
     alpha = float(cfg.get("significance_alpha", 0.05))
     floor = float(options["psd_floor"])
@@ -282,29 +381,26 @@ def _log_peak_background_ratios(psd_seed, freqs, candidates, cfg, selection_mode
     for candidate in candidates:
         target_bin = int(candidate["nearest_bin"])
         window = int(options["peak_window_bins"])
-        if "window_start_bin" in candidate:
-            window_start = int(candidate["window_start_bin"])
-            window_stop = int(candidate["window_stop_bin"])
+        window_start = max(0, target_bin - window)
+        window_stop = min(len(freqs), target_bin + window + 1)
+        coordinate = candidate.get("coordinate")
+        if coordinate is None:
+            coordinate_indices = range(len(COORDINATES))
         else:
-            window_start = max(0, target_bin - window)
-            window_stop = min(len(freqs), target_bin + window + 1)
-        for coordinate_index, coordinate in enumerate(labels):
-            local_mean = np.mean(psd_seed[:, coordinate_index, window_start:window_stop],
-                                 axis=0)
-            if candidate.get("select_peak_within_window", False):
-                tested_bin = window_start + int(np.argmax(local_mean))
-            elif "window_start_bin" in candidate:
-                tested_bin = target_bin
-            elif options["peak_power"] == "window_max":
-                tested_bin = window_start + int(np.argmax(local_mean))
-            else:
-                tested_bin = target_bin
+            if coordinate not in COORDINATES:
+                raise ValueError(f"unknown peak coordinate {coordinate!r}")
+            coordinate_indices = (COORDINATES.index(coordinate),)
+        for coordinate_index in coordinate_indices:
+            coordinate = COORDINATES[coordinate_index]
+            # Both automatically discovered peaks and predefined targets are
+            # tested at a bin fixed without looking at the test seeds.
+            tested_bin = target_bin
             left_start, left_stop, right_start, right_stop = _peak_background_slices(
                 freqs,
                 tested_bin,
                 options,
-                window_start=window_start if "window_start_bin" in candidate else None,
-                window_stop=window_stop if "window_stop_bin" in candidate else None,
+                window_start=window_start,
+                window_stop=window_stop,
             )
             peak_power = psd_seed[:, coordinate_index, tested_bin]
             background = np.concatenate([
@@ -324,9 +420,8 @@ def _log_peak_background_ratios(psd_seed, freqs, candidates, cfg, selection_mode
                 "peak_source": candidate["source"],
                 "peak_rank": candidate["peak_rank"],
                 "target_frequency": float(candidate["target_frequency"]),
-                "target_band_min": float(candidate.get("target_band_min", np.nan)),
-                "target_band_max": float(candidate.get("target_band_max", np.nan)),
                 "tested_frequency": float(freqs[tested_bin]),
+                "tested_omega": 2.0 * math.pi * float(freqs[tested_bin]),
                 "nearest_bin": int(target_bin),
                 "tested_bin": int(tested_bin),
                 "peak_power_method": options["peak_power"],
@@ -351,147 +446,289 @@ def _log_peak_background_ratios(psd_seed, freqs, candidates, cfg, selection_mode
                 "significance_alpha": alpha,
                 "confidence_level": confidence,
             })
-    for coordinate in labels:
+    for coordinate in COORDINATES:
         indices = [index for index, value in enumerate(row_coordinates)
                    if value == coordinate]
         adjusted = _holm_adjust([rows[index]["p_value_one_sided"] for index in indices])
         for local_index, row_index in enumerate(indices):
             rows[row_index]["p_value_adjusted"] = float(adjusted[local_index])
             rows[row_index]["significant"] = bool(adjusted[local_index] < alpha)
+    if not d_values:
+        return rows, np.empty((0, psd_seed.shape[0]), dtype=float)
     return rows, np.asarray(d_values, dtype=float)
 
 
+def _analyze_saved_spectrum(freqs, psd_seed, psd_mean, cfg):
+    """Run discovery and test analysis using only arrays saved by spectrum."""
+
+    freqs = np.asarray(freqs, dtype=float)
+    psd_seed = np.asarray(psd_seed, dtype=float)
+    psd_mean = np.asarray(psd_mean, dtype=float)
+    if psd_seed.ndim != 3 or psd_seed.shape[1:] != (
+        len(COORDINATES), freqs.size
+    ):
+        raise ValueError(
+            "saved psd_seed must have shape "
+            f"(n_seed, {len(COORDINATES)}, {freqs.size})"
+        )
+    if psd_mean.shape != psd_seed.shape[1:]:
+        raise ValueError("saved psd_mean shape does not match saved psd_seed")
+
+    options = _peak_significance_cfg(cfg)
+    seed_split = _fixed_seed_split(psd_seed.shape[0], options)
+    discovery_indices = seed_split["discovery_seed_indices"]
+    test_indices = seed_split["test_seed_indices"]
+    discovery_psd_mean = np.mean(psd_seed[discovery_indices], axis=0)
+    detected_peaks = _detect_peaks_by_coordinate(
+        freqs, discovery_psd_mean, cfg
+    )
+    candidates = _candidate_peak_specs(
+        freqs, detected_peaks, cfg, options
+    )
+    significance_rows = []
+    significance_values = np.empty((0, test_indices.size), dtype=float)
+    if options["enabled"]:
+        significance_rows, significance_values = _log_peak_background_ratios(
+            psd_seed[test_indices],
+            freqs,
+            candidates,
+            cfg,
+            selection_mode="fixed_contiguous_discovery_test_seed_split",
+        )
+    predefined_rows = [
+        row for row in significance_rows
+        if row["peak_source"] == "predefined_target"
+    ]
+    return {
+        "detected_peaks_by_coordinate": detected_peaks,
+        "discovery_psd_mean": discovery_psd_mean,
+        "peak_significance_rows": significance_rows,
+        "peak_significance_values": significance_values,
+        "predefined_target_tests": predefined_rows,
+        "peak_significance_options": options,
+        "seed_split": seed_split,
+    }
+
+
 def _write_outputs(run_dir: Path, result: dict, cfg: dict) -> None:
+    peak_header = [
+        "coordinate", "rank", "frequency", "omega", "bin", "psd_value",
+        "prominence", "width",
+    ]
+    detected_peaks = result.get("detected_peaks_by_coordinate", [])
+    peak_rows = [[row[key] for key in peak_header] for row in detected_peaks]
+    storage.write_csv(
+        run_dir / "tables" / "detected_peaks_by_coordinate.csv",
+        peak_header,
+        peak_rows,
+    )
+    # Historical filename retained as an alias of the corrected formal table.
     storage.write_csv(
         run_dir / "tables" / "spectrum_peaks.csv",
-        ["rank", "bin", "frequency", "omega", "omega_low", "omega_high",
-         "combined_psd", "prominence"],
-        result["peaks"],
+        peak_header,
+        peak_rows,
     )
-    checks = result["target_frequency_checks"]
+
+    checks = result.get("target_frequency_checks", [])
+    check_header = [
+        "kind", "omega", "frequency", "frequency_resolution",
+        "nyquist_frequency", "resolved", "nearest_fft_bin",
+    ]
     storage.write_csv(
         run_dir / "tables" / "frequency_resolution_checks.csv",
-        ["kind", "omega", "frequency", "frequency_resolution",
-         "nyquist_frequency", "resolved", "nearest_fft_bin"],
-        [[row[key] for key in ("kind", "omega", "frequency",
-                              "frequency_resolution", "nyquist_frequency",
-                              "resolved", "nearest_fft_bin")] for row in checks],
+        check_header,
+        [[row[key] for key in check_header] for row in checks],
     )
+
+    significance_header = [
+        "coordinate", "selection_mode", "peak_source", "peak_rank",
+        "target_frequency", "tested_frequency", "tested_omega", "nearest_bin",
+        "tested_bin", "peak_power_method", "peak_window_bins", "exclude_bins",
+        "background_bins_per_side", "background_left_min",
+        "background_left_max", "background_right_min",
+        "background_right_max", "n_seed", "mean_log_peak_ratio",
+        "std_log_peak_ratio", "standard_error", "t_statistic",
+        "degrees_of_freedom", "p_value_one_sided", "p_value_adjusted",
+        "confidence_interval_low", "confidence_interval_high",
+        "significant", "significance_alpha", "confidence_level",
+    ]
     significance_rows = result.get("peak_significance_rows", [])
-    if significance_rows:
-        header = [
-            "coordinate", "selection_mode", "peak_source", "peak_rank",
-            "target_frequency", "target_band_min", "target_band_max",
-            "tested_frequency", "nearest_bin", "tested_bin", "peak_power_method",
-            "peak_window_bins", "exclude_bins", "background_bins_per_side",
-            "background_left_min",
-            "background_left_max", "background_right_min",
-            "background_right_max", "n_seed", "mean_log_peak_ratio",
-            "std_log_peak_ratio", "standard_error", "t_statistic",
-            "degrees_of_freedom", "p_value_one_sided", "p_value_adjusted",
-            "confidence_interval_low", "confidence_interval_high",
-            "significant", "significance_alpha", "confidence_level",
-        ]
-        storage.write_csv(
-            run_dir / "tables" / "spectrum_peak_significance.csv",
-            header,
-            [[row[key] for key in header] for row in significance_rows],
-        )
-    storage.write_json(run_dir / "data" / "sampling_metadata.json",
-                       result["sampling_metadata"])
-
-    import matplotlib.pyplot as plt
-
-    labels = ("x", "y", "z")
-    fig, axes = plt.subplots(3, 1, figsize=(8, 9), sharex=True)
-    for output, axis in enumerate(axes):
-        frequencies = result["freqs"]
-        use = frequencies > 0
-        axis.loglog(frequencies[use], result["psd_mean"][output, use],
-                    label=f"{labels[output]} PSD")
-        axis.fill_between(
-            frequencies[use],
-            np.maximum(result["psd_ci_low"][output, use], 1e-300),
-            np.maximum(result["psd_ci_high"][output, use], 1e-300),
-            alpha=0.25,
-            label=f"{100 * cfg.get('confidence_level', 0.95):.1f}% CI",
-        )
-        for row in result["peaks"]:
-            axis.axvline(row[2], color="tab:red", alpha=0.35, linewidth=0.8)
-        axis.set_ylabel("PSD")
-        axis.legend(frameon=False, fontsize=8)
-    axes[-1].set_xlabel("frequency")
-    fig.suptitle(
-        "Natural spectrum\n"
-        f"resolution={result['sampling_metadata']['frequency_resolution']:.4g}, "
-        f"Nyquist={result['sampling_metadata']['nyquist_frequency']:.4g}, "
-        f"Welch={cfg['welch_segment_length']}, overlap={cfg['welch_overlap_samples']}"
+    storage.write_csv(
+        run_dir / "tables" / "spectrum_peak_significance.csv",
+        significance_header,
+        [[row[key] for key in significance_header] for row in significance_rows],
     )
-    fig.tight_layout()
-    fig.savefig(run_dir / "figures" / "natural_spectrum.pdf")
-    fig.savefig(run_dir / "figures" / "natural_spectrum.png", dpi=160)
-    plt.close(fig)
+    predefined_rows = result.get("predefined_target_tests", [])
+    storage.write_csv(
+        run_dir / "tables" / "predefined_target_tests.csv",
+        significance_header,
+        [[row[key] for key in significance_header] for row in predefined_rows],
+    )
 
+    if "sampling_metadata" in result:
+        storage.write_json(
+            run_dir / "data" / "sampling_metadata.json",
+            result["sampling_metadata"],
+        )
+    if "seed_split" in result:
+        storage.write_json(
+            run_dir / "data" / "peak_detection_seed_split.json",
+            result["seed_split"],
+        )
+
+    _write_coordinate_peak_figure(run_dir, result, cfg)
     if significance_rows:
         _write_peak_significance_figure(run_dir, result, cfg)
+
+
+def _write_coordinate_peak_figure(run_dir: Path, result: dict, cfg: dict) -> None:
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(3, 1, figsize=(9, 10), sharex=True)
+    frequencies = np.asarray(result["freqs"], dtype=float)
+    psd_mean = np.asarray(result["psd_mean"], dtype=float)
+    use = frequencies > 0.0
+    detected = result.get("detected_peaks_by_coordinate", [])
+    target_rows = result.get("predefined_target_tests", [])
+    for coordinate_index, (coordinate, axis) in enumerate(
+        zip(COORDINATES, axes)
+    ):
+        axis.loglog(
+            frequencies[use],
+            psd_mean[coordinate_index, use],
+            color="0.2",
+            linewidth=0.9,
+            label=f"{coordinate} mean PSD (all seeds)",
+        )
+        if "psd_ci_low" in result and "psd_ci_high" in result:
+            axis.fill_between(
+                frequencies[use],
+                np.maximum(result["psd_ci_low"][coordinate_index, use], 1e-300),
+                np.maximum(result["psd_ci_high"][coordinate_index, use], 1e-300),
+                alpha=0.18,
+                color="0.5",
+                label=f"{100 * cfg.get('confidence_level', 0.95):.1f}% CI",
+            )
+        coordinate_peaks = [
+            row for row in detected if row["coordinate"] == coordinate
+        ]
+        if coordinate_peaks:
+            bins = np.asarray([row["bin"] for row in coordinate_peaks], dtype=int)
+            axis.scatter(
+                frequencies[bins],
+                psd_mean[coordinate_index, bins],
+                marker="o",
+                facecolors="none",
+                edgecolors="tab:blue",
+                s=44,
+                linewidths=1.1,
+                zorder=4,
+                label="automatic peak",
+            )
+        coordinate_targets = [
+            row for row in target_rows if row["coordinate"] == coordinate
+        ]
+        if coordinate_targets:
+            bins = np.asarray(
+                [row["tested_bin"] for row in coordinate_targets], dtype=int
+            )
+            axis.scatter(
+                frequencies[bins],
+                psd_mean[coordinate_index, bins],
+                marker="x",
+                color="tab:orange",
+                s=52,
+                linewidths=1.4,
+                zorder=5,
+                label="predefined target",
+            )
+        axis.set_ylabel(f"{coordinate} PSD")
+        axis.grid(True, which="both", alpha=0.18)
+        axis.legend(frameon=False, fontsize=8, loc="best")
+    axes[-1].set_xlabel("frequency (Lorenz time unit^-1)")
+
+    metadata = result.get("sampling_metadata", {})
+    resolution = metadata.get(
+        "frequency_resolution", _frequency_resolution(frequencies)
+    )
+    discovery_count = len(result["seed_split"]["discovery_seed_indices"])
+    test_count = len(result["seed_split"]["test_seed_indices"])
+    fig.suptitle(
+        "Coordinate-resolved natural spectra\n"
+        f"automatic peaks: {discovery_count} discovery seeds; "
+        f"significance: {test_count} test seeds; resolution={resolution:.4g}"
+    )
+    fig.tight_layout()
+    fig.savefig(run_dir / "figures" / "coordinate_psd_peaks.pdf")
+    fig.savefig(run_dir / "figures" / "coordinate_psd_peaks.png", dpi=180)
+    # Historical names remain aliases of the corrected visualization.
+    fig.savefig(run_dir / "figures" / "natural_spectrum.pdf")
+    fig.savefig(run_dir / "figures" / "natural_spectrum.png", dpi=180)
+    plt.close(fig)
 
 
 def _write_peak_significance_figure(run_dir: Path, result: dict, cfg: dict) -> None:
     import matplotlib.pyplot as plt
 
-    labels = ("x", "y", "z")
-    freqs = result["freqs"]
+    del cfg
     rows = result["peak_significance_rows"]
-    fig, axes = plt.subplots(3, 2, figsize=(12, 10))
-    for coordinate_index, coordinate in enumerate(labels):
-        psd_axis = axes[coordinate_index, 0]
-        ratio_axis = axes[coordinate_index, 1]
-        use = freqs > 0.0
-        psd_axis.loglog(freqs[use], result["psd_mean"][coordinate_index, use],
-                        color="C0", linewidth=0.9)
+    fig, axes = plt.subplots(3, 1, figsize=(11, 10), sharey=True)
+    for coordinate, axis in zip(COORDINATES, axes):
         coord_rows = [row for row in rows if row["coordinate"] == coordinate]
-        for row in coord_rows:
-            color = "tab:green" if row["significant"] else "tab:red"
-            psd_axis.axvline(row["tested_frequency"], color=color, alpha=0.45,
-                             linewidth=0.8)
-        psd_axis.set_ylabel(f"{coordinate} PSD")
-        psd_axis.grid(True, which="both", alpha=0.2)
-
         x = np.arange(len(coord_rows))
         means = np.asarray([row["mean_log_peak_ratio"] for row in coord_rows])
         low = np.asarray([row["confidence_interval_low"] for row in coord_rows])
         high = np.asarray([row["confidence_interval_high"] for row in coord_rows])
-        colors = ["tab:green" if row["significant"] else "tab:red"
-                  for row in coord_rows]
-        ratio_axis.errorbar(
+        if coord_rows:
+            axis.errorbar(
+                x,
+                means,
+                yerr=np.vstack([means - low, high - means]),
+                fmt="none",
+                ecolor="0.35",
+                capsize=3,
+                linewidth=0.8,
+            )
+        for index, row in enumerate(coord_rows):
+            marker = "X" if row["peak_source"] == "predefined_target" else "o"
+            color = "tab:green" if row["significant"] else "tab:red"
+            axis.scatter(
+                [index],
+                [row["mean_log_peak_ratio"]],
+                marker=marker,
+                color=color,
+                s=42,
+                zorder=3,
+            )
+        axis.axhline(0.0, color="black", linewidth=0.8)
+        axis.set_xticks(
             x,
-            means,
-            yerr=np.vstack([means - low, high - means]),
-            fmt="none",
-            ecolor="0.35",
-            capsize=3,
-            linewidth=0.8,
-        )
-        ratio_axis.scatter(x, means, c=colors, zorder=3)
-        ratio_axis.axhline(0.0, color="black", linewidth=0.8)
-        ratio_axis.set_xticks(
-            x,
-            [f"{row['peak_rank']}\n{row['tested_frequency']:.3g}Hz"
-             for row in coord_rows],
-            rotation=0,
+            [
+                (
+                    f"target\n{row['target_frequency']:.3g}"
+                    if row["peak_source"] == "predefined_target"
+                    else f"auto {row['peak_rank']}\n{row['tested_frequency']:.3g}"
+                )
+                for row in coord_rows
+            ],
+            rotation=25,
+            ha="right",
             fontsize=7,
         )
-        ratio_axis.set_ylabel("mean log peak/background")
-        ratio_axis.grid(True, axis="y", alpha=0.2)
-    axes[-1, 0].set_xlabel("frequency")
-    axes[-1, 1].set_xlabel("candidate peak")
+        axis.set_ylabel(f"{coordinate}: mean $D_r$")
+        axis.grid(True, axis="y", alpha=0.2)
+    axes[-1].set_xlabel("candidate frequency (Lorenz time unit^-1)")
     fig.suptitle(
-        "Natural spectrum peak significance\n"
-        "green: Holm-adjusted significant; red: not significant"
+        "Test-seed peak/background significance\n"
+        "circle: automatic peak; X: predefined target; "
+        "green: coordinate-wise Holm significant"
     )
     fig.tight_layout()
+    fig.savefig(run_dir / "figures" / "peak_significance.pdf")
+    fig.savefig(run_dir / "figures" / "peak_significance.png", dpi=180)
+    # Historical names remain aliases of the corrected figure.
     fig.savefig(run_dir / "figures" / "spectrum_peak_significance.pdf")
-    fig.savefig(run_dir / "figures" / "spectrum_peak_significance.png", dpi=160)
+    fig.savefig(run_dir / "figures" / "spectrum_peak_significance.png", dpi=180)
     plt.close(fig)
 
 
@@ -540,43 +777,7 @@ def run(cfg, run_dir, runtime, resume=False, client=None):
         trapezoid = np.trapz
     area = trapezoid(psd_mean, freqs, axis=-1)
     combined = (psd_mean / np.maximum(area[:, None], 1e-300)).mean(axis=0)
-    peaks = _peak_rows(freqs, combined, cfg)
-    significance_options = _peak_significance_cfg(cfg)
-    peak_significance_rows = []
-    peak_significance_values = np.empty((0, int(cfg["n_seed"])), dtype=float)
-    significance_peaks = peaks
-    significance_psd_seed = psd_seed
-    selection_mode = "exploratory_same_seed_peak_selection"
-    if significance_options["enabled"]:
-        if significance_options["strict_split"]:
-            n_seed = psd_seed.shape[0]
-            n_discovery = int(round(
-                n_seed * float(significance_options["discovery_seed_fraction"])))
-            n_discovery = max(1, min(n_seed - 1, n_discovery))
-            discovery_seed = psd_seed[:n_discovery]
-            significance_psd_seed = psd_seed[n_discovery:]
-            discovery_mean = discovery_seed.mean(axis=0)
-            discovery_area = trapezoid(discovery_mean, freqs, axis=-1)
-            discovery_combined = (
-                discovery_mean / np.maximum(discovery_area[:, None], 1e-300)
-            ).mean(axis=0)
-            significance_peaks = _peak_rows(freqs, discovery_combined, cfg)
-            selection_mode = (
-                f"strict_split_discovery_seed_0_to_{n_discovery - 1}"
-                f"_test_seed_{n_discovery}_to_{n_seed - 1}"
-            )
-        reference_combined = discovery_combined if significance_options["strict_split"] else combined
-        candidates = _candidate_peak_specs(
-            freqs,
-            significance_peaks,
-            cfg,
-            significance_options,
-            reference_psd=reference_combined,
-        )
-        peak_significance_rows, peak_significance_values = (
-            _log_peak_background_ratios(
-                significance_psd_seed, freqs, candidates, cfg, selection_mode)
-        )
+    analysis = _analyze_saved_spectrum(freqs, psd_seed, psd_mean, cfg)
     sampling_metadata = {
         "n_record_samples": int(cfg["n_record_samples"]),
         "record_duration": int(cfg["n_record_samples"]) / float(cfg["sample_rate"]),
@@ -601,13 +802,17 @@ def run(cfg, run_dir, runtime, resume=False, client=None):
         "psd_se": psd_se,
         "psd_ci_low": psd_low,
         "psd_ci_high": psd_high,
+        # Retained only as an auxiliary visualization array.  It is not used
+        # for formal peak discovery or candidate construction.
         "combined_psd": combined,
-        "peaks": peaks,
-        "peak_significance_rows": peak_significance_rows,
-        "peak_significance_values": peak_significance_values,
-        "peak_significance_options": significance_options,
+        "peaks": _legacy_z_peak_array(
+            analysis["detected_peaks_by_coordinate"],
+            sampling_metadata["frequency_resolution"],
+        ),
+        "legacy_peak_coordinate": "z",
         "sampling_metadata": sampling_metadata,
         "target_frequency_checks": checks,
     }
+    result.update(analysis)
     _write_outputs(run_dir, result, cfg)
     return result

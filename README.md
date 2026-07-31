@@ -97,28 +97,47 @@ python -m lorenz_sine.cli amplitude-scan \
   --steady-run <steady_run_id>
 ```
 
-The unforced `spectrum` stage also writes per-peak significance checks for
-the natural-spectrum candidates:
+The unforced `spectrum` stage detects peaks independently on the discovery-seed
+mean Welch PSD for each coordinate.  It writes the coordinate-resolved peak
+table, predefined-target tests, and two visual checks:
 
 ```text
-results/runs/<spectrum_run_id>/tables/spectrum_peak_significance.csv
-results/runs/<spectrum_run_id>/figures/spectrum_peak_significance.pdf
-results/runs/<spectrum_run_id>/figures/spectrum_peak_significance.png
+results/runs/<spectrum_run_id>/tables/detected_peaks_by_coordinate.csv
+results/runs/<spectrum_run_id>/tables/predefined_target_tests.csv
+results/runs/<spectrum_run_id>/figures/coordinate_psd_peaks.png
+results/runs/<spectrum_run_id>/figures/peak_significance.png
 ```
 
-These tests use the saved per-seed Welch PSD array from the same spectrum
-run.  For each coordinate and candidate frequency, the sample is the
-per-seed log peak-to-background power ratio
+Candidates are ranked by prominence within `x`, `y`, and `z`, with an explicit
+minimum frequency separation to suppress duplicate points on one broad peak.
+The normalized `combined_psd` is retained only as an auxiliary array and is
+never used for formal peak discovery.  The configured `2.63` target is tested
+at its nearest saved frequency bin and is labeled `predefined_target`; no
+frequency-band maximum is relabeled as an automatic peak.
+
+Peak significance uses a fixed contiguous split of the saved seed indices.
+Discovery seeds only choose automatic peak bins, while test seeds only provide
+the per-seed log peak-to-background sample
 `log(P_peak / P_background)`.  The one-sided Student t test is
 `H0: E[D] <= 0` versus `H1: E[D] > 0`; FFT amplitudes, PSD values, frequency
-bins, and Welch windows are not treated as independent samples.
+bins, and Welch windows are not treated as independent samples.  P values are
+Holm-adjusted within coordinate.
 
-By default, candidate peaks are the same peaks already detected from the
-mean unforced PSD, plus any configured target angular frequencies or
-harmonics.  This default is an exploratory test because the same seeds can be
-used both to choose and test peak locations.  Set
-`spectrum.peak_significance.strict_split=true` to use separate discovery and
-test seed subsets when the run has enough seeds.
+An existing completed spectrum run can be reanalyzed without running the
+Lorenz integrator.  This creates a new timestamped derived spectrum run by
+default and leaves the source run unchanged:
+
+```bash
+python scripts/analyze_spectrum_peak_significance.py \
+  <spectrum_run_id> --config configs/spectrum_server.json
+```
+
+This postprocessor reads the run's saved `freqs`, `psd_seed`, and `psd_mean`.
+Use `--in-place` only when intentionally replacing artifacts in the source
+run.
+`scripts/analyze_spectrum_harmonic_bands.py` is exploratory legacy analysis:
+its outputs are paused as formal natural frequencies and must not be used as
+the source of subsequent forcing frequencies.
 
 At this point the run already contains the required signed Fourier
 significance table and visual check:

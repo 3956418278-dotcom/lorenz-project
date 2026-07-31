@@ -9,6 +9,7 @@
   "welch_overlap_samples": 16384,
   "f_min": 0.01,
   "prominence": 0.02,
+  "peak_min_distance_frequency": 0.02,
   "top_n": 8,
   "target_omegas": [],
   "combination_omegas": [],
@@ -19,27 +20,19 @@
     "exclude_bins": 3,
     "background_bins": 24,
     "include_detected_peaks": true,
-    "include_target_omegas": true,
-    "include_target_frequencies": true,
-    "target_frequencies": [],
-    "target_frequency_bands": [
-      {
-        "label": "around_2p63",
-        "min": 2.6,
-        "max": 2.66
-      }
-    ],
-    "fundamental_omegas": [],
-    "fundamental_frequencies": [],
-    "harmonic_count": 0,
-    "strict_split": false,
-    "discovery_seed_fraction": 0.5
+    "predefined_target_frequencies": [2.63],
+    "strict_split": true,
+    "discovery_seed_fraction": 0.5,
+    "seed_split_strategy": "contiguous_seed_index"
   },
   "sampling_rationale": {
     "n_seed": "96 independent initial-condition seeds give the peak/background t tests materially smaller seed uncertainty than the shared 46-seed base config.",
     "n_record_samples": "2^18 post-spinup samples provide an 8192-time-unit record at sample_rate=32.",
     "fft_length": "2^16 sets the reported FFT frequency grid to 32/65536 = 0.00048828125.",
     "welch_segment_length": "2^15 gives long local spectra while retaining 15 overlapping Welch segments per seed.",
-    "welch_overlap_samples": "50 percent overlap is explicit."
+    "welch_overlap_samples": "50 percent overlap is explicit.",
+    "peak_detection": "Peaks are detected independently on x, y, and z discovery-seed mean PSDs, ranked by prominence, with a minimum separation of 0.02 Lorenz time unit^-1.",
+    "seed_split": "Seeds 0-47 are fixed discovery seeds and seeds 48-95 are fixed test seeds; test seeds never choose a peak bin.",
+    "predefined_target": "Frequency 2.63 is tested only at its nearest saved frequency bin and is labeled predefined_target, never automatic_peak."
   }
 }

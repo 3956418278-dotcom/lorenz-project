@@ -1,0 +1,13 @@
+{
+  "cache": {
+    "hits": 0,
+    "misses": 0
+  },
+  "command": "scripts/analyze_spectrum_peak_significance.py 20260730-142831-523836786_spectrum_c7dacfd4 --config configs/spectrum_server.json",
+  "completed_at": "2026-07-31T10:25:44.777424",
+  "created_at": "2026-07-31T10:25:33.589284",
+  "elapsed_seconds": 11.224173545837402,
+  "execution_backend": "postprocess",
+  "stage_times": {},
+  "worker_count": 1
+}

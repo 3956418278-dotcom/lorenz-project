@@ -1,8 +1,8 @@
-"""Add peak significance outputs to an existing unforced spectrum run.
+"""Create coordinate peak and significance outputs from an existing spectrum run.
 
-This is a post-processing helper: it reads the saved per-seed PSD from a
-completed spectrum run and writes the same significance table and figure as a
-fresh spectrum run.  It never runs the Lorenz integrator.
+This postprocessor reads the saved frequency grid, per-seed PSD, and mean PSD
+from a completed run.  It performs the fixed discovery/test split and writes a
+new derived spectrum run by default.  It never runs the Lorenz integrator.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -21,11 +22,11 @@ if str(PROJECT_ROOT / "code") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "code"))
 
 from lorenz_sine import storage  # noqa: E402
-from lorenz_sine.config import load_config  # noqa: E402
+from lorenz_sine.config import config_hash, load_config  # noqa: E402
 from lorenz_sine.natural_spectrum import (  # noqa: E402
-    _candidate_peak_specs,
-    _log_peak_background_ratios,
-    _peak_significance_cfg,
+    _analyze_saved_spectrum,
+    _frequency_resolution,
+    _legacy_z_peak_array,
     _write_outputs,
 )
 
@@ -41,8 +42,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         help=(
-            "Optional spectrum config used only for peak_significance settings. "
-            "Simulation settings still come from the saved run config."
+            "Optional spectrum config used only for coordinate peak detection "
+            "and significance settings. Simulation settings still come from "
+            "the saved run config."
+        ),
+    )
+    parser.add_argument(
+        "--output-run-id",
+        help=(
+            "Optional explicit ID for the new derived run. By default a fresh "
+            "timestamped spectrum run ID is generated."
+        ),
+    )
+    parser.add_argument(
+        "--in-place",
+        action="store_true",
+        help=(
+            "Overwrite the input run instead of creating a new derived run. "
+            "Use only when intentionally updating old artifacts."
         ),
     )
     return parser.parse_args()
@@ -50,47 +67,98 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    run_dir, _, result = storage.require_run(args.spectrum_run_id, "spectrum")
-    cfg = storage.read_json(run_dir / "config.json")
+    if args.in_place and args.output_run_id:
+        raise ValueError("--output-run-id cannot be used with --in-place")
+
+    source_run_dir, _, source_result = storage.require_run(
+        args.spectrum_run_id, "spectrum")
+    cfg = storage.read_json(source_run_dir / "config.json")
     if args.config:
         override = load_config(args.config, "spectrum")
-        for key in ("peak_significance", "confidence_level",
-                    "significance_alpha", "target_omegas"):
+        for key in (
+            "f_min",
+            "prominence",
+            "top_n",
+            "peak_min_distance_frequency",
+            "peak_significance",
+            "confidence_level",
+            "significance_alpha",
+        ):
             if key in override:
                 cfg[key] = override[key]
+        cfg["config_sources"] = override.get("config_sources", cfg.get(
+            "config_sources", []))
+        cfg["config_path"] = override.get("config_path", cfg.get("config_path"))
+    cfg["config_hash"] = config_hash(cfg)
 
-    for key in ("freqs", "psd_seed", "peaks"):
-        if key not in result:
+    for key in ("freqs", "psd_seed", "psd_mean"):
+        if key not in source_result:
             raise ValueError(
                 f"spectrum run {args.spectrum_run_id} lacks {key!r}; "
-                "cannot test peak significance without per-seed PSD data"
+                "cannot post-process without the saved Welch PSD arrays"
             )
 
-    options = _peak_significance_cfg(cfg)
-    if not options["enabled"]:
+    analysis = _analyze_saved_spectrum(
+        source_result["freqs"],
+        source_result["psd_seed"],
+        source_result["psd_mean"],
+        cfg,
+    )
+    if not analysis["peak_significance_options"]["enabled"]:
         raise ValueError("peak_significance.enabled is false")
-    candidates = _candidate_peak_specs(
-        result["freqs"],
-        result["peaks"],
-        cfg,
-        options,
-        reference_psd=result.get("combined_psd"),
+    result = dict(source_result)
+    result.update(analysis)
+    result["peaks"] = _legacy_z_peak_array(
+        analysis["detected_peaks_by_coordinate"],
+        _frequency_resolution(source_result["freqs"]),
     )
-    rows, values = _log_peak_background_ratios(
-        result["psd_seed"],
-        result["freqs"],
-        candidates,
-        cfg,
-        selection_mode="postprocess_existing_spectrum_run",
-    )
-    result["peak_significance_rows"] = rows
-    result["peak_significance_values"] = values
-    result["peak_significance_options"] = options
-    _write_outputs(run_dir, result, cfg)
-    storage.save_result(run_dir, result)
-    print(run_dir / "tables" / "spectrum_peak_significance.csv")
-    print(run_dir / "figures" / "spectrum_peak_significance.pdf")
-    print(run_dir / "figures" / "spectrum_peak_significance.png")
+    result["legacy_peak_coordinate"] = "z"
+
+    started = time.time()
+    if args.in_place:
+        output_run_id = args.spectrum_run_id
+        output_run_dir = source_run_dir
+        runtime = None
+    else:
+        output_run_id, output_run_dir, runtime, _ = storage.begin_run(
+            "spectrum",
+            cfg,
+            sys.argv,
+            parent_run_ids={"reanalyzed_spectrum": args.spectrum_run_id},
+            input_paths={
+                "source_result": str(source_run_dir / "data" / "result.npz"),
+                "source_config": str(source_run_dir / "config.json"),
+            },
+            backend="postprocess",
+            worker_count=1,
+            resume=args.output_run_id,
+        )
+        storage.append_log(
+            output_run_dir,
+            f"postprocess_source_run={args.spectrum_run_id}",
+        )
+
+    _write_outputs(output_run_dir, result, cfg)
+    storage.save_result(output_run_dir, result)
+    if runtime is not None:
+        storage.complete_run(output_run_dir, runtime, started)
+
+    print("output run id:", output_run_id)
+    for relative in (
+        "tables/detected_peaks_by_coordinate.csv",
+        "tables/predefined_target_tests.csv",
+        "figures/coordinate_psd_peaks.png",
+        "figures/peak_significance.png",
+    ):
+        print(output_run_dir / relative)
+    z_frequencies = [
+        row["frequency"]
+        for row in analysis["detected_peaks_by_coordinate"]
+        if row["coordinate"] == "z"
+    ]
+    print("z automatic peak frequencies:", ", ".join(
+        f"{frequency:.9g}" for frequency in z_frequencies
+    ))
 
 
 if __name__ == "__main__":

@@ -128,11 +128,19 @@ def _validate_spectrum(cfg: dict) -> None:
         raise ValueError("welch_overlap_samples must be in [0, welch_segment_length)")
     if float(cfg["sample_rate"]) <= 0:
         raise ValueError("sample_rate must be positive")
+    if float(cfg["f_min"]) < 0.0:
+        raise ValueError("f_min must be non-negative")
+    if float(cfg["prominence"]) <= 0.0:
+        raise ValueError("prominence must be positive")
+    if int(cfg["top_n"]) <= 0:
+        raise ValueError("top_n must be positive")
+    if float(cfg.get("peak_min_distance_frequency", 1.0)) <= 0.0:
+        raise ValueError("peak_min_distance_frequency must be positive")
     peak = cfg.get("peak_significance", {})
     if peak:
-        if peak.get("peak_power", "nearest_bin") not in ("nearest_bin", "window_max"):
+        if peak.get("peak_power", "nearest_bin") != "nearest_bin":
             raise ValueError(
-                "peak_significance.peak_power must be nearest_bin or window_max"
+                "peak_significance.peak_power must be nearest_bin"
             )
         for key in ("peak_window_bins", "exclude_bins"):
             if int(peak.get(key, 0)) < 0:
@@ -141,31 +149,20 @@ def _validate_spectrum(cfg: dict) -> None:
             raise ValueError("peak_significance.background_bins must be positive")
         if float(peak.get("psd_floor", 1e-300)) <= 0.0:
             raise ValueError("peak_significance.psd_floor must be positive")
-        if int(peak.get("harmonic_count", 0)) < 0:
-            raise ValueError("peak_significance.harmonic_count must be non-negative")
-        for key in ("target_frequencies", "fundamental_frequencies"):
+        for key in ("predefined_target_frequencies",):
             if any(float(value) <= 0.0 for value in peak.get(key, [])):
                 raise ValueError(f"peak_significance.{key} entries must be positive")
-        for band in peak.get("target_frequency_bands", []):
-            if isinstance(band, dict):
-                low = float(band["min"])
-                high = float(band["max"])
-            else:
-                if len(band) != 2:
-                    raise ValueError(
-                        "peak_significance.target_frequency_bands entries "
-                        "must be [min, max] or objects with min/max"
-                    )
-                low = float(band[0])
-                high = float(band[1])
-            if low <= 0.0 or high <= low:
-                raise ValueError(
-                    "peak_significance.target_frequency_bands must have 0 < min < max"
-                )
         fraction = float(peak.get("discovery_seed_fraction", 0.5))
         if not 0.0 < fraction < 1.0:
             raise ValueError(
                 "peak_significance.discovery_seed_fraction must lie strictly between zero and one"
+            )
+        if peak.get("seed_split_strategy", "contiguous_seed_index") != (
+            "contiguous_seed_index"
+        ):
+            raise ValueError(
+                "peak_significance.seed_split_strategy must be "
+                "contiguous_seed_index"
             )
 
 
