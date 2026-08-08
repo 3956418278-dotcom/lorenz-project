@@ -22,10 +22,35 @@ from .config import config_hash, forced_sampling_metadata, load_config  # noqa: 
 
 
 def mpi_setup():
-    size = int(os.getenv(
-        "OMPI_COMM_WORLD_SIZE",
-        os.getenv("PMI_SIZE", os.getenv("SLURM_NTASKS", "1")),
-    ))
+    local_workers = os.getenv("LORENZ_LOCAL_WORKERS")
+    if local_workers:
+        from dask.distributed import Client, LocalCluster
+
+        storage.ensure_roots()
+        worker_count = int(local_workers)
+        if worker_count < 1:
+            raise ValueError("LORENZ_LOCAL_WORKERS must be positive")
+        cluster = LocalCluster(
+            n_workers=worker_count,
+            threads_per_worker=1,
+            dashboard_address=None,
+            local_directory=str(storage.DASK_CACHE_ROOT),
+        )
+        client = Client(cluster)
+        print(f"execution_backend=local-dask workers={worker_count}", flush=True)
+        return client, "local-dask", worker_count
+
+    try:
+        from mpi4py import MPI
+
+        comm = MPI.COMM_WORLD
+        size = comm.Get_size()
+    except Exception:
+        comm = None
+        size = int(os.getenv(
+            "OMPI_COMM_WORLD_SIZE",
+            os.getenv("PMI_SIZE", os.getenv("SLURM_NTASKS", "1")),
+        ))
     if size > 2:
         from dask_mpi import initialize
 
@@ -35,6 +60,7 @@ def mpi_setup():
             dashboard=False,
             local_directory=str(storage.DASK_CACHE_ROOT),
             worker_options={"silence_logs": logging.WARNING},
+            comm=comm,
         )
         from dask.distributed import Client
 

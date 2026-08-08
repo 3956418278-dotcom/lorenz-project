@@ -1,2 +1,7 @@
 __pycache__/
 *.py[cod]
+outputs/harmonic_response/*/cache/
+outputs/harmonic_response/matplotlib/
+outputs/harmonic_response/smoke*/
+outputs/harmonic_response/scan_*/
+outputs/harmonic_response/detailed_*/

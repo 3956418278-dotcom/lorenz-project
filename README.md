@@ -334,10 +334,10 @@ python -m lorenz_sine.cli amplitude-scan \
 ```
 
 For the formal unforced spectrum run, `configs/spectrum_server.json` uses
-`n_seed=96`; 98 MPI ranks provide 96 workers:
+`n_seed=2048`; MPI workers process the seeds in batches:
 
 ```bash
-bash scripts/run_spectrum_mpi.sh 98 configs/spectrum_server.json
+bash scripts/run_spectrum_mpi.sh 48 configs/spectrum_server.json
 ```
 
 For the forced signed-harmonic significance stages that still use the shared
