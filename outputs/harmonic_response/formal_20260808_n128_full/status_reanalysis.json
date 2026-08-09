@@ -1,0 +1,63 @@
+{
+  "config": {
+    "a_list": [
+      0.02,
+      0.04,
+      0.06,
+      0.08,
+      0.1,
+      0.12
+    ],
+    "alpha": 0.05,
+    "atol": 1e-11,
+    "beta": 2.6666666666666665,
+    "candidate_count": 12,
+    "exclusion_half_width": 0.06,
+    "f_max": 3.2,
+    "f_min": 0.12,
+    "fft_length": 16384,
+    "method": "DOP853",
+    "n_record_samples": 16384,
+    "n_spectrum_seed": 8,
+    "peak_min_distance_frequency": 0.08,
+    "peak_prominence_fraction": 0.08,
+    "rho": 28.0,
+    "rtol": 1e-08,
+    "sample_rate": 32.0,
+    "sigma": 10.0,
+    "t_spinup": 128.0,
+    "welch_overlap_samples": 4096,
+    "welch_segment_length": 8192
+  },
+  "elapsed_seconds": 65.77150249481201,
+  "figures": {
+    "natural_spectrum": "outputs/harmonic_response/formal_20260808_n128_full/figures/natural_spectrum_candidates.png",
+    "summary": "outputs/harmonic_response/formal_20260808_n128_full/figures/summary.png"
+  },
+  "formal_natural_peak_count": 3,
+  "formal_natural_spectrum_run": "20260731-151340-434542998_spectrum_a93aa73d",
+  "mode": "offline_reanalysis",
+  "n_traj": 128,
+  "recommended_validation_frequencies": [
+    1.0546875,
+    0.765625,
+    3.1484375,
+    1.015625
+  ],
+  "run_dir": "outputs/harmonic_response/formal_20260808_n128_full",
+  "scanned_frequencies": [
+    0.3359375,
+    0.6953125,
+    0.765625,
+    1.015625,
+    1.0546875,
+    1.6640625,
+    2.0546875,
+    2.265625,
+    2.328125,
+    2.6328125,
+    2.8515625,
+    3.1484375
+  ],
+  "standalone_natural_spectrum_seed_note": "Standalone harmonic natural spectrum has n_spectrum_seed=8; formal natural-peak exclusion uses the repository spectrum run when available."
+}
