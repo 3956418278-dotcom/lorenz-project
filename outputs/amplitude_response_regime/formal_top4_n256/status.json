@@ -1,0 +1,45 @@
+{
+  "a_list": [
+    0.02,
+    0.03,
+    0.04,
+    0.05,
+    0.06,
+    0.08,
+    0.1,
+    0.12
+  ],
+  "elapsed_seconds": 8916.016620635986,
+  "figures": [
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/contributions_f_2.265625.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/higher_ratio_f_2.265625.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/relative_orders_f_2.265625.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/raw_scaling_f_2.265625.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/contributions_f_1.054688.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/higher_ratio_f_1.054688.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/relative_orders_f_1.054688.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/raw_scaling_f_1.054688.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/contributions_f_0.765625.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/higher_ratio_f_0.765625.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/relative_orders_f_0.765625.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/raw_scaling_f_0.765625.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/contributions_f_3.148438.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/higher_ratio_f_3.148438.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/relative_orders_f_3.148438.png",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/figures/raw_scaling_f_3.148438.png"
+  ],
+  "frequencies": [
+    2.265625,
+    1.0546875,
+    0.765625,
+    3.1484375
+  ],
+  "n_traj": 256,
+  "run_dir": "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256",
+  "seed_offset": 2000000,
+  "tables": [
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/tables/coefficient_statistics.csv",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/tables/amplitude_response.csv",
+    "/mnt/d/lorenz project/outputs/amplitude_response_regime/formal_top4_n256/tables/regime_summary.csv"
+  ]
+}

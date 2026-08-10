@@ -1,0 +1,13 @@
+frequency,coordinate,c1_significant,c2_significant,c3_any_significant,c4_any_significant,A_where_higher_ratio_below_0.20,A_where_higher_ratio_below_0.10,A_where_higher_ratio_below_0.05
+2.265625,x,False,True,False,True,0.06,0.05,0.03
+2.265625,y,False,True,False,True,0.06,0.04,0.03
+2.265625,z,True,False,False,True,0.06,0.04,0.03
+1.0546875,x,False,False,False,False,0.04,0.02,
+1.0546875,y,False,False,False,False,0.04,0.02,
+1.0546875,z,False,False,False,False,0.05,0.03,0.02
+0.765625,x,False,False,False,False,0.04,0.02,
+0.765625,y,False,False,False,False,0.04,0.02,
+0.765625,z,False,False,False,False,0.05,0.03,0.02
+3.1484375,x,False,False,False,False,0.08,0.06,0.04
+3.1484375,y,False,False,False,False,0.06,0.05,0.04
+3.1484375,z,True,False,False,False,0.08,0.06,0.04
