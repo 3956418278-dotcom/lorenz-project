@@ -1,0 +1,49 @@
+{
+  "config": {
+    "amplitudes": [
+      0.001,
+      0.003,
+      0.01,
+      0.03,
+      0.1,
+      0.3,
+      1.0
+    ],
+    "atol": 1e-11,
+    "beta": 2.6666666666666665,
+    "bootstrap_seed": 92821,
+    "candidate_snr_threshold": 3.0,
+    "confidence_level": 0.95,
+    "exclude_half_width_bins": 1,
+    "forced_spinup_time": 128.0,
+    "method": "DOP853",
+    "n_bootstrap": 2000,
+    "n_phase": 64,
+    "n_record_cycles": 128,
+    "ngrp": 64,
+    "noise_half_width_bins": 20,
+    "omegas": [
+      6.62679700366597
+    ],
+    "phase": 0.0,
+    "primary_forcing_direction": 2,
+    "rho": 28.0,
+    "rtol": 1e-08,
+    "seed_offset": 3000000,
+    "sigma": 10.0,
+    "significance_alpha": 0.05,
+    "t_spinup": 128.0,
+    "weak_snr_threshold": 1.5
+  },
+  "elapsed_seconds": 5878.766585588455,
+  "files": [
+    "scan_summary.csv",
+    "harmonic_statistics.csv",
+    "first_order_tensor.csv",
+    "second_order_tensor.csv",
+    "numerical_response_tensors.npz",
+    "hotelling_results.csv",
+    "report.txt"
+  ],
+  "output_dir": "sine_second/amplitude_candidate_omega_6p6268_formal"
+}

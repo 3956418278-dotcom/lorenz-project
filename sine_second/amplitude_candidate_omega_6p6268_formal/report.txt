@@ -1,0 +1,112 @@
+omega = 6.62679700367
+forcing amplitude = 0.001
+forcing direction for harmonic summary = z
+output for harmonic summary = x
+
+First-order response L(ω), complex convention cos + i sin:
+[[-47.731597-14.043139j -10.705543-11.088642j  61.192498+67.368171j]
+ [-55.600664+17.418333j -17.153433 -4.03957j  103.178519+26.949817j]
+ [-20.651408-27.319145j -11.29812 -10.635237j -54.740521-23.469388j]]
+
+Second-order H_mean:
+[[[-63471.610765 -29639.621086   4588.431514]
+  [-29639.621086  37268.697773 -17928.599371]
+  [  4588.431514 -17928.599371 221952.82768 ]]
+
+ [[-62482.199967 -28810.270005   3513.718405]
+  [-28810.270005  35501.240693 -18600.069987]
+  [  3513.718405 -18600.069987 220817.273823]]
+
+ [[ 29682.582223  -5143.750748  -5351.201353]
+  [ -5143.750748  -4053.240801  -4001.041876]
+  [ -5351.201353  -4001.041876  12451.35533 ]]]
+
+Second-order H_cos(2ω):
+[[[ 61614.570709  -6691.149638 -10284.331089]
+  [ -6691.149638  65781.730389  -3890.070621]
+  [-10284.331089  -3890.070621  77157.494259]]
+
+ [[ 61560.088706 -20676.393559  -5114.452655]
+  [-20676.393559 105765.104058   9923.057165]
+  [ -5114.452655   9923.057165  56916.33277 ]]
+
+ [[-21352.662079  -7726.40826   -6828.222336]
+  [ -7726.40826  -45173.493111 -13520.653127]
+  [ -6828.222336 -13520.653127  12524.261504]]]
+
+Second-order H_sin(2ω):
+[[[  -1528.916745  -11799.552165    5517.433571]
+  [ -11799.552165   32826.829154   11432.213079]
+  [   5517.433571   11432.213079  -13563.303516]]
+
+ [[ -83390.42723    -3093.924851   19357.0369  ]
+  [  -3093.924851  -54014.775331   16719.465188]
+  [  19357.0369     16719.465188 -115612.700396]]
+
+ [[  16324.175486    -511.181146  -25167.234962]
+  [   -511.181146  107860.697999    3493.32406 ]
+  [ -25167.234962    3493.32406     9906.743696]]]
+
+|H(2ω)|:
+[[[541395.446766 113954.393523 117580.506793]
+  [113954.393523 575913.674821 120979.689474]
+  [117580.506793 120979.689474 501463.985521]]
+
+ [[893932.282227 187753.658594 195293.635194]
+  [187753.658594 952296.948168 200517.0251  ]
+  [195293.635194 200517.0251   827806.107859]]
+
+ [[567214.464343 124946.552236 139533.549315]
+  [124946.552236 613344.196428 135200.692259]
+  [139533.549315 135200.692259 590277.851309]]]
+
+Harmonics:
+          amplitude [95% CI]      noise [95% CI]      SNR [95% CI]      p
+1ω  0.484424 [0.419902, 0.549051]  0.516586 [0.503149, 0.530301]  0.950402 [0.820758, 1.0838]  p=0.47718
+2ω  0.220094 [0.195417, 0.245961]  0.205768 [0.200195, 0.211857]  1.09186 [0.956809, 1.22498]  p=0.98608
+3ω  0.0692158 [0.0601561, 0.0790643]  0.0648246 [0.0629929, 0.0666176]  1.08518 [0.931604, 1.2439]  p=0.0992924
+4ω  0.0218845 [0.0193149, 0.0246489]  0.021378 [0.0208261, 0.0219532]  1.0293 [0.911997, 1.14979]  p=0.610821
+
+A2/A1 = 0.922361 [0.551512, 1.44526]
+
+Amplitude grid:
+[0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0]
+
+Omega grid:
+[6.62679700366597]
+
+Seed-level retention:
+response_by_seed has shape (n_seed, output, n_phase) for the report-selected omega/amplitude/primary forcing combination.
+fourier_by_seed has shape (n_seed, output, harmonic, component[cos,sin]) for the same selected combination.
+phase_response_by_seed_all has shape (n_omega, n_amp, n_combo, n_seed, output, n_phase).
+fourier_by_seed_all has shape (n_omega, n_amp, n_combo, n_seed, output, harmonic, component[cos,sin]).
+L_theta_by_seed and H_theta_by_seed retain matched-seed finite-difference tensors.
+
+Confidence intervals:
+All scalar amplitudes, noise floors, SNRs, A2/A1 ratios, L coefficients, and H coefficients use seed-level bootstrap means with n_bootstrap=2000 and percentile 95% intervals.  Lorenz ODEs are not reintegrated during bootstrap.
+
+Tensor definitions:
+L_ij(theta) = (M_i(+A e_j, theta) - M_i(-A e_j, theta)) / (2 A).
+H_ijj(theta) = (M_i(+A e_j, theta) + M_i(-A e_j, theta) - 2 M_i(0, theta)) / A^2.
+H_ijk(theta) = (M_i(++ ) - M_i(+-) - M_i(-+) + M_i(--)) / (4 A^2) for j != k.
+The same seed and spinup state are used across (+A, -A, 0) and mixed finite-difference evaluations.
+
+Candidate amplitude intervals:
+none
+
+Generated figures:
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure1_raw_fft_omega_0_amp_0.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure1_raw_fft_omega_0_amp_1.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure1_raw_fft_omega_0_amp_2.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure1_raw_fft_omega_0_amp_3.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure1_raw_fft_omega_0_amp_4.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure1_raw_fft_omega_0_amp_5.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure1_raw_fft_omega_0_amp_6.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure_2_harmonic_amplitude_omega_6.6268.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure_3_harmonic_snr_omega_6.6268.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure4_r21_omega_6.6268.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure5_hotelling_omega_6.6268.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure6_tensor_H_mean.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure6_tensor_H_cos2.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure6_tensor_H_sin2.png
+sine_second/amplitude_candidate_omega_6p6268_formal/figures/figure6_tensor_H_abs_2omega.png
