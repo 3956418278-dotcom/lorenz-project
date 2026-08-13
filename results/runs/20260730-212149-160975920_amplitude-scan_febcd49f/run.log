@@ -1,4 +1,0 @@
-execution_backend=dask-mpi workers=5
-RUN_ID=20260730-212149-160975920_amplitude-scan_febcd49f
-RESULT PACKAGE:
-results/packages/20260730-212149-160975920_amplitude-scan_febcd49f.tar.gz
