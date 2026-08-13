@@ -1,15 +1,8 @@
 name: lorenz-sine
-variables:
-  PYTHONDONTWRITEBYTECODE: "1"
-  MPLBACKEND: Agg
 channels:
   - conda-forge
 dependencies:
-  - python>=3.10
+  - python
   - numpy
   - scipy
   - matplotlib
-  - dask
-  - distributed
-  - dask-mpi
-  - mpi4py
