@@ -113,6 +113,30 @@ Use this change test when shaping a boundary:
 
 A healthy boundary keeps that change local.
 
+Before implementing another variation of an existing workflow, identify what is
+actually new and what should remain shared.
+
+A new variation such as another experiment dimension, dataset of the same kind,
+runtime profile, model instance, analysis slice, or protocol instance should
+reuse the existing owners for the mechanisms that have not changed.
+
+Ask:
+
+> Is this a new capability, or another instance or dimension of an existing capability?
+
+If it is another variation, keep the variation local. Reuse the existing
+integration, sampling, persistence, statistics, runtime, or other stable
+mechanisms where they still represent the same concept.
+
+Concrete repetition is a signal to consolidate. When sibling implementations
+start copying substantial orchestration or infrastructure, or one sibling needs
+several private helpers from another, inspect the ownership boundary before
+adding another copy.
+
+Do not abstract speculative future needs. Let the first implementation stay
+local when the stable concept is not yet clear; consolidate once repetition has
+made the shared mechanism concrete.
+
 When a small change starts affecting unrelated areas, inspect the ownership and interface before expanding the patch.
 
 Let known future variations shape an interface when they are already part of the intended project.
@@ -161,6 +185,15 @@ A delegated task should receive the confirmed context it needs and return:
 
 Keep detailed exploration, logs, intermediate calculations, and local implementation
 history in the delegated context or project artifacts. Retrieve them again only when needed.
+
+Delegation isolates working context, not repository ownership.
+
+When delegated work changes the repository, integrate it through the existing
+ownership boundaries. A sub-agent should not create a parallel implementation
+of mechanisms the project already owns merely to make its local task self-contained.
+
+The parent agent is responsible for recognizing overlap between delegated work
+and existing project mechanisms before accepting new repository structure.
 
 The parent agent owns decomposition, synthesis, project-level decisions, and coordination.
 The user should not need to create the agent structure or relay messages between agents.

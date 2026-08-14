@@ -1,15 +1,17 @@
 import numpy as np
 
-from lorenz.frequency_reconnaissance import FrequencyReconData
-from lorenz.strength_identifiability import StrengthStudyData
+from lorenz.strength_study import (
+    FrequencyStudyData,
+    StrengthStudyData,
+    dc_components,
+    second_harmonic_estimators,
+)
 from lorenz.variance_reduction import (
     _bootstrap_indices,
     analyze_dc_variance,
     analyze_second_identification,
     analyze_second_variance_ratios,
     analyze_unforced_second_diagnostic,
-    dc_components,
-    second_harmonic_estimators,
 )
 
 
@@ -80,7 +82,7 @@ def test_dc_subtraction_cannot_omit_nonzero_unforced_mean():
 
 def test_heldout_variance_family_confirms_fixed_lower_variance_alternative():
     study = _study()
-    data = FrequencyReconData(
+    data = FrequencyStudyData(
         block_ids=study.block_ids,
         strengths=STRENGTHS,
         harmonics=HARMONICS,
@@ -104,7 +106,7 @@ def test_heldout_variance_family_confirms_fixed_lower_variance_alternative():
 
 def test_identification_and_dc_families_keep_shared_block_as_unit():
     study = _study()
-    data = FrequencyReconData(
+    data = FrequencyStudyData(
         block_ids=study.block_ids,
         strengths=STRENGTHS,
         harmonics=HARMONICS,

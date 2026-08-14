@@ -4,15 +4,14 @@ import numpy as np
 import pytest
 
 from lorenz.strength_identifiability import (
-    StrengthStudyData,
-    _checked_config,
     _real_imag_summary,
     _sample_size_projection,
     analyze_strength_series,
     analyze_strength_study,
-    fit_block_power_series,
     persist_strength_study,
 )
+from lorenz.strength_series import TARGET_ORDERS, fit_block_power_series
+from lorenz.strength_study import StrengthStudyData, validate_strength_sampling_config
 
 
 def test_block_power_fit_recovers_complex_physical_coefficients():
@@ -30,6 +29,14 @@ def test_block_power_fit_recovers_complex_physical_coefficients():
     np.testing.assert_allclose(fit.coefficients[:, 1], high)
     np.testing.assert_allclose(fit.fitted, values)
     np.testing.assert_allclose(fit.residuals, 0, atol=1e-13)
+
+
+def test_target_order_definition_preserves_decision_family_order():
+    assert tuple(TARGET_ORDERS.items()) == (
+        ("odd_fundamental", (1, 3)),
+        ("even_second_harmonic", (2, 4)),
+        ("even_dc", (2, 4)),
+    )
 
 
 def test_power_fit_requires_explicit_block_and_strength_axes():
@@ -83,7 +90,7 @@ def test_config_rejects_nyquist_harmonic():
         "protocol": {"omega": 2.0, "direction": [1.0, 0.0, 0.0]},
     }
     with pytest.raises(ValueError, match="strictly below Nyquist"):
-        _checked_config(config)
+        validate_strength_sampling_config(config)
 
 
 def _synthetic_contrasts():

@@ -2,12 +2,14 @@ import numpy as np
 import pytest
 
 from lorenz.frequency_reconnaissance import (
-    FrequencyReconData,
     _multi_frequency_bootstrap,
     _normalized_target,
-    observation_cycle_count,
 )
-from lorenz.strength_identifiability import StrengthStudyData
+from lorenz.strength_study import (
+    FrequencyStudyData,
+    StrengthStudyData,
+    minimum_duration_cycle_count,
+)
 
 
 STRENGTHS = np.array([0.25, 0.5, 1.0, 2.0, 3.0, 4.0])
@@ -56,12 +58,12 @@ def _study(omega, n_block=16):
 
 
 def test_observation_rule_uses_both_time_and_cycle_floors():
-    assert observation_cycle_count(0.5, 64, 200) == 64
-    assert observation_cycle_count(2.0, 64, 200) == 64
-    assert observation_cycle_count(4.0, 64, 200) == 128
-    assert observation_cycle_count(8.0, 64, 200) == 255
+    assert minimum_duration_cycle_count(0.5, 64, 200) == 64
+    assert minimum_duration_cycle_count(2.0, 64, 200) == 64
+    assert minimum_duration_cycle_count(4.0, 64, 200) == 128
+    assert minimum_duration_cycle_count(8.0, 64, 200) == 255
     with pytest.raises(ValueError, match="positive"):
-        observation_cycle_count(0, 64, 200)
+        minimum_duration_cycle_count(0, 64, 200)
 
 
 def test_confirmed_fourier_normalizations_are_applied():
@@ -73,7 +75,7 @@ def test_confirmed_fourier_normalizations_are_applied():
 
 def test_frequency_family_is_one_explicit_concatenated_max_family():
     studies = {0.5: _study(0.5), 1.0: _study(1.0)}
-    data = FrequencyReconData(
+    data = FrequencyStudyData(
         block_ids=tuple(range(16)),
         strengths=STRENGTHS,
         harmonics=HARMONICS,
@@ -111,26 +113,13 @@ def test_frequency_family_rejects_misaligned_block_rows():
     second = StrengthStudyData(
         **{**second.__dict__, "block_ids": tuple(reversed(second.block_ids))}
     )
-    data = FrequencyReconData(
-        block_ids=first.block_ids,
-        strengths=STRENGTHS,
-        harmonics=HARMONICS,
-        frequencies=(0.5, 1.0),
-        studies={0.5: first, 1.0: second},
-        frequency_runtime_seconds={0.5: 1.0, 1.0: 1.0},
-        source={},
-    )
     with pytest.raises(ValueError, match="block IDs/order"):
-        _multi_frequency_bootstrap(
-            data,
-            {
-                "bootstrap": {
-                    "confidence": 0.95,
-                    "resamples": 9,
-                    "root_entropy": 12,
-                    "batch_size": 5,
-                    "higher_order_fraction_limit": 0.2,
-                    "structural_null_outputs": NULLS,
-                }
-            },
+        FrequencyStudyData(
+            block_ids=first.block_ids,
+            strengths=STRENGTHS,
+            harmonics=HARMONICS,
+            frequencies=(0.5, 1.0),
+            studies={0.5: first, 1.0: second},
+            frequency_runtime_seconds={0.5: 1.0, 1.0: 1.0},
+            source={},
         )

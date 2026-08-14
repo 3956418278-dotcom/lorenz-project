@@ -9,19 +9,21 @@ from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from hashlib import sha256
 import json
-import os
 from pathlib import Path
-import platform
-import subprocess
-import sys
 import time
 
 import numpy as np
-import scipy
 from scipy.integrate import solve_ivp
 
+from .artifacts import (
+    active_source_identifiers,
+    environment_provenance,
+    file_sha256,
+    git_provenance,
+    write_json_atomic,
+    write_npz_atomic,
+)
 from .core import _forcing_angle, check_solution, lorenz_rhs
 from .ensemble import SymmetricXYUniformProposal, generate_initial_state_blocks
 from .forced_transient import CONDITION_NAMES, STATE_NAMES
@@ -522,52 +524,6 @@ def analyze_numerical_convergence_study(data: NumericalConvergenceStudyData) -> 
     }
 
 
-def _json_ready(value):
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, tuple):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, dict):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_ready(item) for item in value]
-    return value
-
-
-def _write_json_atomic(path: Path, value) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(_json_ready(value), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _git_provenance(repo_root: Path) -> dict:
-    def run(*arguments):
-        result = subprocess.run(
-            arguments, cwd=repo_root, text=True, capture_output=True, check=False
-        )
-        return result.stdout.strip() if result.returncode == 0 else None
-
-    return {
-        "head": run("git", "rev-parse", "HEAD"),
-        "worktree_dirty": bool(run("git", "status", "--short")),
-    }
-
-
 def persist_numerical_convergence_study(
     output_dir,
     data: NumericalConvergenceStudyData,
@@ -581,37 +537,36 @@ def persist_numerical_convergence_study(
     config_path = output_dir / "config_snapshot.json"
     raw_path = output_dir / "raw_fourier_summaries.npz"
     derived_path = output_dir / "derived_diagnostics.json"
-    _write_json_atomic(config_path, config)
-    temporary_raw = raw_path.with_suffix(".npz.tmp")
-    with temporary_raw.open("wb") as stream:
-        np.savez_compressed(
-            stream,
-            block_ids=np.asarray(data.block_ids, dtype=np.uint32),
-            solver_names=np.asarray(data.solver_names),
-            reference_solver=np.asarray(data.reference_solver),
-            phase_variant_names=np.asarray(data.phase_variant_names),
-            phase_resolutions=data.phase_resolutions,
-            phase_shifted=data.phase_shifted,
-            observation_cycles=data.observation_cycles,
-            harmonics=data.harmonics,
-            omega=np.asarray(data.omega),
-            discard_time=np.asarray(data.discard_time),
-            master_phase_count=np.asarray(data.master_phase_count),
-            cycle_fourier=data.cycle_fourier,
-            raw_proposals=data.raw_proposals,
-            initial_states=data.initial_states,
-            child_spawn_keys=np.asarray(data.child_spawn_keys, dtype=np.uint32),
-        )
-    os.replace(temporary_raw, raw_path)
-    _write_json_atomic(derived_path, derived)
+    write_json_atomic(config_path, config)
+    write_npz_atomic(
+        raw_path,
+        {
+            "block_ids": np.asarray(data.block_ids, dtype=np.uint32),
+            "solver_names": np.asarray(data.solver_names),
+            "reference_solver": np.asarray(data.reference_solver),
+            "phase_variant_names": np.asarray(data.phase_variant_names),
+            "phase_resolutions": data.phase_resolutions,
+            "phase_shifted": data.phase_shifted,
+            "observation_cycles": data.observation_cycles,
+            "harmonics": data.harmonics,
+            "omega": np.asarray(data.omega),
+            "discard_time": np.asarray(data.discard_time),
+            "master_phase_count": np.asarray(data.master_phase_count),
+            "cycle_fourier": data.cycle_fourier,
+            "raw_proposals": data.raw_proposals,
+            "initial_states": data.initial_states,
+            "child_spawn_keys": np.asarray(data.child_spawn_keys, dtype=np.uint32),
+        },
+    )
+    write_json_atomic(derived_path, derived)
     manifest = {
         "schema_version": 1,
         "classification": "exploratory",
         "study_id": config["study_id"],
         "files": {
-            "config_snapshot.json": f"sha256:{_file_sha256(config_path)}",
-            "raw_fourier_summaries.npz": f"sha256:{_file_sha256(raw_path)}",
-            "derived_diagnostics.json": f"sha256:{_file_sha256(derived_path)}",
+            "config_snapshot.json": f"sha256:{file_sha256(config_path)}",
+            "raw_fourier_summaries.npz": f"sha256:{file_sha256(raw_path)}",
+            "derived_diagnostics.json": f"sha256:{file_sha256(derived_path)}",
         },
         "array_semantics": {
             "cycle_fourier": (
@@ -634,7 +589,7 @@ def persist_numerical_convergence_study(
         "interpretation": derived["interpretation"],
     }
     manifest_path = output_dir / "manifest.json"
-    _write_json_atomic(manifest_path, manifest)
+    write_json_atomic(manifest_path, manifest)
     return manifest
 
 
@@ -646,15 +601,8 @@ def run_numerical_convergence_study(config_path) -> tuple[Path, dict, float]:
     repo_root = Path(__file__).resolve().parents[2]
     data = generate_numerical_convergence_study(config)
     derived = analyze_numerical_convergence_study(data)
-    source_paths = [
-        config_path,
-        Path(__file__).resolve(),
-        repo_root / "src/lorenz/core.py",
-        repo_root / "src/lorenz/ensemble.py",
-        repo_root / "src/lorenz/response.py",
-        repo_root / "experiments/run_numerical_convergence_pilot.py",
-    ]
-    config_identifier = f"sha256:{_file_sha256(config_path)}"
+    runner_path = repo_root / "experiments/run_numerical_convergence_pilot.py"
+    config_identifier = f"sha256:{file_sha256(config_path)}"
     timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     output_dir = repo_root / config["output_root"] / (
         f"{timestamp}_{config_identifier[7:19]}"
@@ -662,17 +610,9 @@ def run_numerical_convergence_study(config_path) -> tuple[Path, dict, float]:
     runtime = time.perf_counter() - start
     provenance = {
         "config_identifier": config_identifier,
-        "code_identifiers": {
-            str(path.relative_to(repo_root)): f"sha256:{_file_sha256(path)}"
-            for path in source_paths
-        },
-        "git": _git_provenance(repo_root),
-        "environment": {
-            "python": sys.version,
-            "platform": platform.platform(),
-            "numpy": np.__version__,
-            "scipy": scipy.__version__,
-        },
+        "code_identifiers": active_source_identifiers(repo_root, runner_path),
+        "git": git_provenance(repo_root),
+        "environment": environment_provenance(),
         "runtime_seconds_before_persistence": runtime,
     }
     manifest = persist_numerical_convergence_study(

@@ -3,6 +3,7 @@ import numpy as np
 from lorenz.observation_efficiency import (
     _cycle_family,
     _target_cycles,
+    _validate_reference_observation_cycles,
     _window_statistics,
     analyze_observation_efficiency,
 )
@@ -127,3 +128,39 @@ def test_analysis_estimates_variance_scaling_without_cycle_replications():
     assert result["resource_options"]["by_cycle_count"]["256"][
         "projected_wall_seconds_from_parent_runtime"
     ] > 100
+
+
+def test_projection_reference_length_comes_from_non_64_cycle_raw_data():
+    config = _config()
+    config.update(
+        {
+            "cycle_lengths": [1, 2, 4, 8, 16, 32],
+            "bootstrap_cycle_lengths": [8, 32],
+            "projection_cycle_options": [64, 128],
+        }
+    )
+    result = analyze_observation_efficiency(
+        _synthetic_raw(n_cycle=32),
+        config,
+        {
+            "confirmed_block_bootstrap": {"coverage": {"critical_value": 3.5}},
+            "provenance": {"runtime_seconds_before_persistence": 100.0},
+        },
+    )
+
+    assert result["family"]["reference_observation_cycles"] == 32
+    assumptions = result["adequacy_resource_projection"]["assumptions"]
+    assert "Full-32-cycle" in assumptions
+    assert "observed 32 cycles" in assumptions
+    scaling = result["adequacy_resource_projection"]["candidate_feature_scaling"]
+    assert all(
+        "correlation_inflation_at_reference_cycles" in item
+        for item in scaling["odd_fundamental"]["4.0"]
+    )
+
+
+def test_parent_config_cycle_count_must_match_raw_cycle_axis():
+    raw = _synthetic_raw(n_cycle=32)
+    assert _validate_reference_observation_cycles({"n_cycle": 32}, raw) == 32
+    with np.testing.assert_raises_regex(ValueError, "does not match raw"):
+        _validate_reference_observation_cycles({"n_cycle": 64}, raw)

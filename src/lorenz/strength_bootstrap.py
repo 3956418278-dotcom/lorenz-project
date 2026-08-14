@@ -12,14 +12,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .strength_identifiability import fit_block_power_series
-
-
-TARGET_ORDERS = {
-    "odd_fundamental": (1, 3),
-    "even_second_harmonic": (2, 4),
-    "even_dc": (2, 4),
-}
+from .strength_series import TARGET_ORDERS, fit_block_power_series
 
 
 @dataclass(frozen=True)
@@ -229,13 +222,14 @@ def build_decision_family(targets, strengths, structural_null_outputs):
     )
 
 
-def _bootstrap_max_statistic(
+def bootstrap_max_statistic(
     samples,
     *,
     resamples: int,
     root_entropy,
     batch_size: int,
 ):
+    """Bootstrap the maximum studentized coordinate error by whole block."""
     samples = np.asarray(samples, dtype=float)
     n_block, n_feature = samples.shape
     mean = samples.mean(axis=0)
@@ -271,7 +265,8 @@ def _bootstrap_max_statistic(
     }
 
 
-def _magnitude_interval(group, lower, upper):
+def complex_rectangle_magnitude_bounds(group, lower, upper):
+    """Bound complex magnitude over simultaneous real/imaginary intervals."""
     def coordinate_bounds(index):
         lo = float(lower[index])
         hi = float(upper[index])
@@ -334,7 +329,7 @@ def analyze_block_bootstrap(
     )
     if matrix.shape[0] != len(block_ids):
         raise ValueError("target block axes must match block_ids")
-    mean, standard_error, statistics, bootstrap_metadata = _bootstrap_max_statistic(
+    mean, standard_error, statistics, bootstrap_metadata = bootstrap_max_statistic(
         matrix,
         resamples=int(resamples),
         root_entropy=root_entropy,
@@ -348,7 +343,9 @@ def analyze_block_bootstrap(
     adequacy_groups = {}
     null_control_exclusions = []
     for group in groups:
-        magnitude_lower, magnitude_upper = _magnitude_interval(group, lower, upper)
+        magnitude_lower, magnitude_upper = complex_rectangle_magnitude_bounds(
+            group, lower, upper
+        )
         record = {
             "observable": group.observable,
             "structural_null": group.structural_null,

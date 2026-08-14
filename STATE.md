@@ -213,133 +213,35 @@ negligible higher order.
 
 ## Existing Exploratory Evidence
 
-An unforced-spinup refinement used 384 blocks for each of two independent
-proposal families, divided into six 64-block batches, with nested endpoints at
-physical times `10, 20, 40, 80, 160`. At `T=40`, within-proposal drift toward
-`T=160` and cross-proposal sensitivity were comparable to observed same-time
-between-batch variation. Full-ensemble standardized proposal sensitivity was
-`0.0039`; state means, lobe balance, and normalized vector-field balance were
-also mutually consistent. This supports `T_spinup=40` as a conservative
-working candidate at the diagnostic resolution of this study. The `T=160`
-endpoint is only an internal reference, the six-batch distributions are
-descriptive, and solver convergence was not tested by this experiment. The
-reproducible output is under
-`outputs/exploratory/unforced_spinup_refinement/20260814T054012_fbf00b2df957/`.
-
-A forced-transient late-window refinement used the same 48 blocks at discard
-times `40, 80, 160, 240, 320`, with non-overlapping windows after time `80`.
-Each window contained 24 cycles and 24 phases (`75.398` physical time) under the
-provisional protocol `omega=2`, `h=0.5`, x-direction. Parity-forbidden odd DC
-retained same-direction onset memory at discard `40` and `80`, then fluctuated
-around zero from `160` onward. Across target, parity-forbidden, and allowed
-higher harmonics, late-window drift was comparable to its paired sensitivity
-standard error and showed no continuing monotone decay. This supports
-`forced discard=160` as a working candidate for subsequent numerical checks,
-not as a cross-protocol convergence conclusion or residual-bias bound. The
-reproducible output is under
-`outputs/exploratory/forced_transient_late_windows/20260814T060949_7b459a19b61b/`.
-
-A numerical-convergence pilot used 32 blocks under the same provisional
-protocol with discard `160`. A 32-point phase grid differed from 64 points by
-about `1.1e-4` to `1.6e-4` RMS on target contrasts and passed a shifted-subgrid
-check; 16 points produced differences of roughly 3--21% of the reference mean.
-For 32 versus 64 cycles, target paired-drift/SE ratios were `0.45`, `1.25`, and
-`0.68`; baseline versus tighter solver ratios were `0.89`, `0.53`, and `1.33`.
-This supports 32 phase points clearly and selects 64 cycles plus the baseline
-solver conservatively. The 64-cycle target contrasts were themselves only
-`0.60--0.85` cross-block SE from zero, so observation-window and solver choices
-are working parameters rather than formal bias bounds. Reproducible output is
-under
-`outputs/exploratory/numerical_convergence_provisional/20260814T062105_afb486be58b6/`.
-
-A crossed-block strength pilot used `B=32` and strengths
-`0.25, 0.5, 1, 2, 4` under provisional `omega=2`, x-direction forcing. It did
-not establish an identification window. First-order x/y signal became visible
-at strong forcing, but fitted cubic/linear contribution diagnostics could not
-exclude material target-harmonic contamination. Symmetry-allowed
-second-harmonic and DC z components remained unstable relative to block
-variation; rough square-root projections were commonly 150--250 blocks for a
-ratio-three scale. For x-direction forcing, Lorenz equivariance makes the
-first-order z component and the even/DC x/y components exact population null
-controls. Their finite-sample excursions, including about 3.3 SE for even-DC
-x/y at `h=2`, demonstrate that marginal ratio thresholds are not acceptable as
-formal family-wide tests. Non-target harmonics stayed below about 1.92 SE, but
-that does not bound higher-order terms at target harmonics. The run took about
-180 seconds and is reproducible under
-`outputs/exploratory/strength_identifiability_provisional/20260814T070309_1c4629df883e/`.
-
-The confirmed strength refinement used 256 crossed blocks, strengths
-`0.25, 0.5, 1, 2, 3, 4`, and 9,999 whole-block bootstrap draws. Its joint family
-contained 210 scalar coordinates and had a simultaneous 95% critical value of
-`3.456595`. First-order odd fundamental signal was identifiable at
-`h=0.5,1,2,3,4`, but higher-/leading-order upper ratios at prefix maxima
-`h=1,2,3,4` were `13.027, 1.765, 1.149, 0.794`, all above 20%. The allowed
-second-harmonic and DC z components were never identifiable, so their adequacy
-ratios failed closed. All exact symmetry-null controls retained zero. The run
-took 1,474 seconds and produced 53 MB of raw summaries under
-`outputs/exploratory/strength_identifiability_refinement/20260814T080709_12e8192abb9f/`.
-The bootstrap uses a fixed observed standard error rather than a fully
-studentized resampled standard error; it constrains the fitted first correction
-but not all still-higher powers.
-
-Reanalysis of the same 256-block artifact found family-wide variance scaling
-close to `Var proportional to 1/L` over 1--64 cycles: median exponent `1.006`
-(10--90% `0.942--1.039`) and median L=64 correlation inflation `0.975`
-(10--90% `0.837--1.310`). Median family SE RMS fell from `0.1913` at 8 cycles
-to `0.0681` at 64. However, first-order point higher-/leading ratios varied
-substantially across 16- and 32-cycle windows before reaching `0.140` (h=2)
-and `0.165` (h=4) at 64 cycles. A staged projection gives simultaneous upper
-ratios of about `0.673/0.435` at L=256, `0.357/0.291` at L=1024, and
-`0.236/0.226` at L=4096. Direct 20% projections require roughly
-9,600--12,400 cycles and 34--44 hours, well outside the observed scaling range.
-The reproducible reanalysis is under
-`outputs/exploratory/within_block_observation_efficiency/20260814T085830_fae3c8131769/`.
-
-Minimal frequency reconnaissance used the fixed grid
-`omega=0.5,1,2,4,8`, the same 32 blocks, and respectively
-`64,64,64,128,255` cycles so every point had at least 64 cycles and about 200
-physical time. One 1,050-coordinate whole-block family had simultaneous 95%
-critical value `3.80817`. At every frequency, symmetry-allowed second harmonic
-and DC remained unidentified and no strength passed 20% adequacy; `omega=2`
-second-order S/N was near the middle of the grid. First-order signal was visible
-at strong forcing at every frequency, no structural null control excluded zero,
-and non-target signal/joint-bound stayed below `0.948`. A post-hoc comparison
-suggested that omitting the theoretically zero unforced n=2 coefficient could
-reduce radial variance by roughly 64--75%, but this is a held-out hypothesis,
-not accepted evidence. The 19.3-minute reproducible run is under
-`outputs/exploratory/frequency_reconnaissance/20260814T132507_9e8a11beb461/`.
-
-A pre-specified held-out study used 32 new, disjoint blocks on the same five
-frequencies. For all symmetry-allowed second-harmonic z coordinates, the
-variance ratio of `A2` to the previous unforced-subtracted estimator ranged
-from `0.225` to `0.530` with median `0.323`; simultaneous upper bounds were
-below one for 28 of 30 frequency-strength cells, with no point reversal in the
-two inconclusive cells. The separately calibrated unforced-n=2 diagnostic had
-no exclusion from zero. Neither estimator identified second harmonic or passed
-20% adequacy at `B=32`. For DC, paired/equal-B-independent variance ratios had
-median `0.926`, all intervals included one, and correlations with the unforced
-baseline were unresolved. A separate baseline at 10% of forced-estimator
-variance was projected to require 318--874 blocks per frequency, so separate
-frequency baselines are not justified. The four 95% diagnostic families were
-calibrated separately, not jointly. The reproducible held-out artifact is under
-`outputs/exploratory/variance_reduction_heldout/20260814T141349_2694329f4136/`.
-
-No-new-trajectory decision analysis found A2 variance scaling near `1/L` across
-the available windows, but conditional identification projections were highly
-unstable and no current point higher-/leading ratio was below 20%. A four- to
-eight-fold x-only observation extension could improve raw identification but
-cannot resolve strength-curvature adequacy or unobserved tensor sectors. The
-six-direction set above is the smallest full-rank effective-quadratic design;
-it has no quadratic residual degrees of freedom. A later balanced nine-direction
-sum/difference design would add residual checks, but its current full-grid cost
-is not justified before the reconnaissance.
-
-One diagnostic audit used `sigma=10`, `rho=28`, `beta=8/3`, `omega=2`, forcing
-direction `(1,0,0)`, strength `0.5`, 12 seeds, and up to 128 cycles. Standard
-errors decreased with longer cycle averages, but target components were not
-reliably separated from background fluctuations. This result is useful only as
-a runtime/noise warning; its parameters, estimator, and numerical values are
-not accepted project definitions or formal scientific evidence.
+- `T_spinup=40` is the conservative working candidate; this is not a proof of
+  exact sampling from `mu0`.
+  Artifact: `outputs/exploratory/unforced_spinup_refinement/20260814T054012_fbf00b2df957/`.
+- `forced discard=160` is the working candidate for the provisional protocol,
+  not a cross-protocol residual-bias bound.
+  Artifact: `outputs/exploratory/forced_transient_late_windows/20260814T060949_7b459a19b61b/`.
+- The numerical working profile is 32 phase points, at least 64 cycles and about
+  200 physical time, and `DOP853` with `rtol=1e-9`, `atol=1e-11`. Observation
+  length and solver choices remain provisional because response noise limited
+  their convergence comparisons.
+  Artifact: `outputs/exploratory/numerical_convergence_provisional/20260814T062105_afb486be58b6/`.
+- The 256-block strength refinement found no identification window under the
+  provisional simultaneous 95% / 20% rule. Its fixed-SE max bootstrap is not a
+  fully studentized bootstrap and the two-power model does not bound all higher
+  powers.
+  Artifact: `outputs/exploratory/strength_identifiability_refinement/20260814T080709_12e8192abb9f/`.
+- Within-block variance was close to `1/L` through 64 cycles, but long-length
+  projections and point curvature were unstable; x-only lengthening is
+  deferred.
+  Artifact: `outputs/exploratory/within_block_observation_efficiency/20260814T085830_fae3c8131769/`.
+- On the fixed octave grid, second harmonic and DC were weak at every frequency
+  and `omega=2` was not an isolated poor point.
+  Artifact: `outputs/exploratory/frequency_reconnaissance/20260814T132507_9e8a11beb461/`.
+- Held-out blocks support working estimator
+  `A2=(C(+h,2)+C(-h,2))/2`, with the unforced n=2 coefficient retained as a bias
+  diagnostic. This reduces second-harmonic variance broadly but did not itself
+  establish identification. DC still needs a common uncertain `mu0` baseline;
+  separate per-frequency baselines are not justified.
+  Artifact: `outputs/exploratory/variance_reduction_heldout/20260814T141349_2694329f4136/`.
 
 ## Working Constraints
 

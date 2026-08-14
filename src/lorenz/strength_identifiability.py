@@ -7,60 +7,32 @@ power-series estimator can be tested independently of one pilot protocol.
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
-from hashlib import sha256
 import json
-import os
 from pathlib import Path
-import platform
-import subprocess
-import sys
 import time
 
 import numpy as np
-import scipy
 
-from .core import simulate_phase_samples
-from .ensemble import SymmetricXYUniformProposal, generate_initial_state_blocks
-from .response import phase_fourier
-
-
-STATE_NAMES = ("x", "y", "z")
-
-
-@dataclass(frozen=True)
-class BlockPowerSeriesFit:
-    """Power-series coefficients fitted independently inside every block."""
-
-    strengths: np.ndarray
-    orders: tuple[int, ...]
-    coefficients: np.ndarray
-    fitted: np.ndarray
-    residuals: np.ndarray
-
-
-@dataclass(frozen=True)
-class StrengthStudyData:
-    """Cycle Fourier summaries for a crossed strength experiment.
-
-    ``positive_cycle_fourier`` and ``negative_cycle_fourier`` have axes
-    ``block, strength, state, cycle, harmonic``.  The unforced array omits the
-    strength axis because one matched baseline is shared by every strength.
-    """
-
-    block_ids: tuple[int, ...]
-    strengths: np.ndarray
-    harmonics: np.ndarray
-    omega: float
-    n_phase: int
-    positive_cycle_fourier: np.ndarray
-    negative_cycle_fourier: np.ndarray
-    unforced_cycle_fourier: np.ndarray
-    raw_proposals: np.ndarray
-    initial_states: np.ndarray
-    child_spawn_keys: tuple[tuple[int, ...], ...]
-    generation_metadata: dict
+from .artifacts import (
+    active_source_identifiers,
+    environment_provenance,
+    file_sha256,
+    git_provenance,
+    write_json_atomic,
+    write_npz_atomic,
+)
+from .strength_series import (
+    BlockPowerSeriesFit,
+    TARGET_ORDERS,
+    fit_block_power_series,
+)
+from .strength_study import (
+    STATE_NAMES,
+    StrengthStudyData,
+    generate_strength_study,
+    harmonic_role,
+    strength_fourier_components,
+)
 
 
 def _checked_strengths(strengths) -> np.ndarray:
@@ -74,65 +46,6 @@ def _checked_strengths(strengths) -> np.ndarray:
     ):
         raise ValueError("strengths must be finite, positive, and strictly increasing")
     return strengths
-
-
-def fit_block_power_series(values, strengths, orders) -> BlockPowerSeriesFit:
-    """Fit declared powers to raw values separately for each crossed block.
-
-    ``values`` has axes ``block, strength, ...``.  No strength normalization
-    is performed before fitting.  Returned coefficients therefore use the
-    physical powers of the configured strength even though a scaled design is
-    used internally for numerical conditioning.
-    """
-    values = np.asarray(values)
-    strengths = _checked_strengths(strengths)
-    orders = tuple(orders)
-    if values.ndim < 2 or values.shape[1] != len(strengths):
-        raise ValueError("values must have axes block, strength, ...")
-    if values.shape[0] < 2 or not np.isfinite(values).all():
-        raise ValueError("values require at least two finite blocks")
-    if (
-        not orders
-        or len(set(orders)) != len(orders)
-        or any(
-            isinstance(order, (bool, np.bool_))
-            or not isinstance(order, (int, np.integer))
-            or order <= 0
-            for order in orders
-        )
-    ):
-        raise ValueError("orders must be distinct positive integers")
-    if len(strengths) < len(orders):
-        raise ValueError("strength count must be at least the coefficient count")
-
-    scale = float(strengths[-1])
-    scaled_design = np.column_stack(
-        [(strengths / scale) ** int(order) for order in orders]
-    )
-    if np.linalg.matrix_rank(scaled_design) < len(orders):
-        raise ValueError("strength design is rank deficient")
-    flattened = np.moveaxis(values, 1, 0).reshape(len(strengths), -1)
-    scaled_coefficients, _, _, _ = np.linalg.lstsq(
-        scaled_design, flattened, rcond=None
-    )
-    physical_coefficients = scaled_coefficients / np.asarray(
-        [scale**int(order) for order in orders]
-    )[:, None]
-    coefficient_shape = (len(orders), values.shape[0], *values.shape[2:])
-    coefficients = np.moveaxis(
-        physical_coefficients.reshape(coefficient_shape), 0, 1
-    )
-    physical_design = np.column_stack(
-        [strengths ** int(order) for order in orders]
-    )
-    fitted = np.einsum("sp,bp...->bs...", physical_design, coefficients)
-    return BlockPowerSeriesFit(
-        strengths=strengths.copy(),
-        orders=tuple(int(order) for order in orders),
-        coefficients=coefficients,
-        fitted=fitted,
-        residuals=values - fitted,
-    )
 
 
 def _real_imag_summary(values) -> dict:
@@ -318,16 +231,6 @@ def _target_series_diagnostics(values, strengths, orders) -> dict:
     }
 
 
-def _harmonic_role(contrast: str, harmonic: int) -> str:
-    if (contrast == "odd" and harmonic == 1) or (
-        contrast == "even" and harmonic in (0, 2)
-    ):
-        return "target"
-    if (harmonic % 2 == 1) == (contrast == "odd"):
-        return "allowed_higher_harmonic"
-    return "parity_forbidden_harmonic"
-
-
 def analyze_strength_series(
     block_ids,
     strengths,
@@ -375,7 +278,7 @@ def analyze_strength_series(
                 for strength_index in range(len(strengths))
             ]
             harmonic_diagnostics[contrast_name][str(int(harmonic))] = {
-                "role": _harmonic_role(contrast_name, int(harmonic)),
+                        "role": harmonic_role(contrast_name, int(harmonic)),
                 "by_strength": summaries,
             }
 
@@ -394,17 +297,23 @@ def analyze_strength_series(
         "target_series": {
             "odd_fundamental": {
                 "raw_expansion": "h * beta1 + h^3 * beta3",
-                **_target_series_diagnostics(odd_target, strengths, (1, 3)),
+                **_target_series_diagnostics(
+                    odd_target, strengths, TARGET_ORDERS["odd_fundamental"]
+                ),
             },
             "even_second_harmonic": {
                 "raw_expansion": "h^2 * gamma2 + h^4 * gamma4",
                 **_target_series_diagnostics(
-                    even_second_target, strengths, (2, 4)
+                    even_second_target,
+                    strengths,
+                    TARGET_ORDERS["even_second_harmonic"],
                 ),
             },
             "even_dc": {
                 "raw_expansion": "h^2 * delta2 + h^4 * delta4",
-                **_target_series_diagnostics(even_dc_target, strengths, (2, 4)),
+                **_target_series_diagnostics(
+                    even_dc_target, strengths, TARGET_ORDERS["even_dc"]
+                ),
             },
         },
         "harmonic_diagnostics": harmonic_diagnostics,
@@ -431,238 +340,13 @@ def analyze_strength_series(
     }
 
 
-def _positive_integer(value, name: str) -> int:
-    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
-        raise ValueError(f"{name} must be a positive integer")
-    if value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return int(value)
-
-
-def _checked_config(config: dict) -> dict:
-    strengths = _checked_strengths(config["strengths"])
-    harmonics = np.asarray(config["harmonics"])
-    protocol = config["protocol"]
-    omega = float(protocol["omega"])
-    phase = float(protocol.get("phase", 0.0))
-    direction = np.asarray(protocol["direction"], dtype=float)
-    discard_time = float(config["discard_time"])
-    n_cycle = _positive_integer(config["n_cycle"], "n_cycle")
-    n_phase = _positive_integer(config["n_phase"], "n_phase")
-    if not np.isfinite(omega) or omega <= 0:
-        raise ValueError("omega must be finite and positive")
-    if not np.isfinite(phase):
-        raise ValueError("phase must be finite")
-    if direction.shape != (3,) or not np.isfinite(direction).all() or not np.any(direction):
-        raise ValueError("direction must be a finite nonzero vector with shape (3,)")
-    if not np.isfinite(discard_time) or discard_time < 0:
-        raise ValueError("discard_time must be finite and nonnegative")
-    if (
-        harmonics.ndim != 1
-        or not np.issubdtype(harmonics.dtype, np.integer)
-        or len(np.unique(harmonics)) != len(harmonics)
-        or not {0, 1, 2}.issubset(set(int(value) for value in harmonics))
-        or len(np.unique(np.mod(harmonics, n_phase))) != len(harmonics)
-    ):
-        raise ValueError("harmonics must be unique, alias-free integers including 0, 1, 2")
-    if 2 * int(np.max(np.abs(harmonics))) >= n_phase:
-        raise ValueError("configured harmonics must lie strictly below Nyquist")
-    return {
-        "strengths": strengths,
-        "harmonics": harmonics.astype(int),
-        "omega": omega,
-        "phase": phase,
-        "direction": direction,
-        "discard_time": discard_time,
-        "n_cycle": n_cycle,
-        "n_phase": n_phase,
-    }
-
-
-def _integrate_cycle_fourier(arguments):
-    initial_state, forcing, checked, cfg = arguments
-    samples = simulate_phase_samples(
-        initial_state,
-        forcing,
-        checked["omega"],
-        checked["phase"],
-        checked["discard_time"],
-        checked["n_cycle"],
-        checked["n_phase"],
-        cfg,
-    )
-    return phase_fourier(
-        samples.values, checked["harmonics"], samples.phase_offset
-    )
-
-
-def generate_strength_study(config: dict) -> StrengthStudyData:
-    """Generate one explicitly exploratory crossed-block strength study."""
-    checked = _checked_config(config)
-    block_count = _positive_integer(config["block_count"], "block_count")
-    workers = _positive_integer(config.get("workers", 1), "workers")
-    initial = config["initial_ensemble"]
-    block_id_start = int(initial["block_id_start"])
-    block_ids = tuple(range(block_id_start, block_id_start + block_count))
-    proposal_cfg = initial["proposal"]
-    proposal = SymmetricXYUniformProposal(
-        x_half_width=proposal_cfg["x_half_width"],
-        y_half_width=proposal_cfg["y_half_width"],
-        z_bounds=tuple(proposal_cfg["z_bounds"]),
-    )
-    cfg = {"lorenz": dict(config["lorenz"]), "solver": dict(config["solver"])}
-    blocks = generate_initial_state_blocks(
-        block_ids,
-        initial["root_entropy"],
-        proposal,
-        float(initial["spinup_time"]),
-        cfg,
-    )
-    forcing_vectors = [np.zeros(3)]
-    forcing_vectors.extend(
-        sign * strength * checked["direction"]
-        for strength in checked["strengths"]
-        for sign in (1.0, -1.0)
-    )
-    tasks = [
-        (blocks.final_states[block_index], forcing, checked, cfg)
-        for block_index in range(block_count)
-        for forcing in forcing_vectors
-    ]
-    if workers == 1:
-        integrated = list(map(_integrate_cycle_fourier, tasks))
-    else:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            integrated = list(executor.map(_integrate_cycle_fourier, tasks))
-    all_conditions = np.asarray(integrated).reshape(
-        block_count,
-        1 + 2 * len(checked["strengths"]),
-        3,
-        checked["n_cycle"],
-        len(checked["harmonics"]),
-    )
-    unforced = all_conditions[:, 0]
-    paired = all_conditions[:, 1:].reshape(
-        block_count,
-        len(checked["strengths"]),
-        2,
-        3,
-        checked["n_cycle"],
-        len(checked["harmonics"]),
-    )
-    return StrengthStudyData(
-        block_ids=blocks.block_ids,
-        strengths=checked["strengths"],
-        harmonics=checked["harmonics"],
-        omega=checked["omega"],
-        n_phase=checked["n_phase"],
-        positive_cycle_fourier=paired[:, :, 0],
-        negative_cycle_fourier=paired[:, :, 1],
-        unforced_cycle_fourier=unforced,
-        raw_proposals=blocks.raw_proposals,
-        initial_states=blocks.final_states,
-        child_spawn_keys=blocks.child_spawn_keys,
-        generation_metadata={
-            "root_entropy": blocks.root_entropy,
-            "root_spawn_key": blocks.root_spawn_key,
-            "bit_generator": blocks.bit_generator,
-            "block_ids": blocks.block_ids,
-            "child_spawn_keys": blocks.child_spawn_keys,
-            "proposal": {
-                "x_half_width": proposal.x_half_width,
-                "y_half_width": proposal.y_half_width,
-                "z_bounds": proposal.z_bounds,
-            },
-            "spinup_time": blocks.spinup_time,
-        },
-    )
-
-
-def strength_target_contrasts(data: StrengthStudyData) -> dict[str, np.ndarray]:
-    """Return block-level raw target contrasts from retained cycle summaries."""
-    positive = np.asarray(data.positive_cycle_fourier).mean(axis=-2)
-    negative = np.asarray(data.negative_cycle_fourier).mean(axis=-2)
-    unforced = np.asarray(data.unforced_cycle_fourier).mean(axis=-2)
-    expected = (len(data.block_ids), len(data.strengths), 3, len(data.harmonics))
-    if positive.shape != expected or negative.shape != expected:
-        raise ValueError("forced Fourier summaries have invalid axes")
-    if unforced.shape != (len(data.block_ids), 3, len(data.harmonics)):
-        raise ValueError("unforced Fourier summaries have invalid axes")
-    odd = (positive - negative) / 2
-    even = (positive + negative) / 2 - unforced[:, None]
-    harmonic_index = {
-        int(harmonic): index for index, harmonic in enumerate(data.harmonics)
-    }
-    return {
-        "odd_fundamental": odd[..., harmonic_index[1]],
-        "even_second_harmonic": even[..., harmonic_index[2]],
-        "even_dc": even[..., harmonic_index[0]].real,
-    }
-
-
 def analyze_strength_study(data: StrengthStudyData) -> dict:
-    positive = np.asarray(data.positive_cycle_fourier).mean(axis=-2)
-    negative = np.asarray(data.negative_cycle_fourier).mean(axis=-2)
-    unforced = np.asarray(data.unforced_cycle_fourier).mean(axis=-2)
-    odd = (positive - negative) / 2
-    even = (positive + negative) / 2 - unforced[:, None]
+    components = strength_fourier_components(data)
+    odd = components.odd
+    even = components.forced_even - components.unforced[:, None]
     return analyze_strength_series(
         data.block_ids, data.strengths, data.harmonics, odd, even
     )
-
-
-def _json_ready(value):
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, tuple):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, dict):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_ready(item) for item in value]
-    return value
-
-
-def _write_json_atomic(path: Path, value) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(_json_ready(value), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _git_provenance(repo_root: Path) -> dict:
-    result = subprocess.run(
-        ("git", "rev-parse", "HEAD"),
-        cwd=repo_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    status = subprocess.run(
-        ("git", "status", "--short"),
-        cwd=repo_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    return {
-        "head": result.stdout.strip() if result.returncode == 0 else None,
-        "worktree_dirty": bool(status.stdout.strip()) if status.returncode == 0 else None,
-    }
 
 
 def persist_strength_study(output_dir, data, derived, config, provenance) -> dict:
@@ -671,34 +355,33 @@ def persist_strength_study(output_dir, data, derived, config, provenance) -> dic
     config_path = output_dir / "config_snapshot.json"
     raw_path = output_dir / "raw_fourier_summaries.npz"
     derived_path = output_dir / "derived_diagnostics.json"
-    _write_json_atomic(config_path, config)
-    temporary_raw = raw_path.with_suffix(".npz.tmp")
-    with temporary_raw.open("wb") as stream:
-        np.savez_compressed(
-            stream,
-            block_ids=np.asarray(data.block_ids, dtype=np.uint32),
-            strengths=data.strengths,
-            harmonics=data.harmonics,
-            omega=np.asarray(data.omega),
-            n_phase=np.asarray(data.n_phase),
-            positive_cycle_fourier=data.positive_cycle_fourier,
-            negative_cycle_fourier=data.negative_cycle_fourier,
-            unforced_cycle_fourier=data.unforced_cycle_fourier,
-            raw_proposals=data.raw_proposals,
-            initial_states=data.initial_states,
-            child_spawn_keys=np.asarray(data.child_spawn_keys, dtype=np.uint32),
-        )
-    os.replace(temporary_raw, raw_path)
-    _write_json_atomic(derived_path, derived)
+    write_json_atomic(config_path, config)
+    write_npz_atomic(
+        raw_path,
+        {
+            "block_ids": np.asarray(data.block_ids, dtype=np.uint32),
+            "strengths": data.strengths,
+            "harmonics": data.harmonics,
+            "omega": np.asarray(data.omega),
+            "n_phase": np.asarray(data.n_phase),
+            "positive_cycle_fourier": data.positive_cycle_fourier,
+            "negative_cycle_fourier": data.negative_cycle_fourier,
+            "unforced_cycle_fourier": data.unforced_cycle_fourier,
+            "raw_proposals": data.raw_proposals,
+            "initial_states": data.initial_states,
+            "child_spawn_keys": np.asarray(data.child_spawn_keys, dtype=np.uint32),
+        },
+    )
+    write_json_atomic(derived_path, derived)
     manifest = {
         "schema_version": 1,
         "classification": "exploratory",
         "study_id": config["study_id"],
         "protocol_status": "provisional_method_validation_only",
         "files": {
-            "config_snapshot.json": f"sha256:{_file_sha256(config_path)}",
-            "raw_fourier_summaries.npz": f"sha256:{_file_sha256(raw_path)}",
-            "derived_diagnostics.json": f"sha256:{_file_sha256(derived_path)}",
+            "config_snapshot.json": f"sha256:{file_sha256(config_path)}",
+            "raw_fourier_summaries.npz": f"sha256:{file_sha256(raw_path)}",
+            "derived_diagnostics.json": f"sha256:{file_sha256(derived_path)}",
         },
         "array_semantics": {
             "positive_cycle_fourier": (
@@ -737,7 +420,7 @@ def persist_strength_study(output_dir, data, derived, config, provenance) -> dic
             "model_scope": bootstrap["model_scope"],
         }
     manifest_path = output_dir / "manifest.json"
-    _write_json_atomic(manifest_path, manifest)
+    write_json_atomic(manifest_path, manifest)
     return manifest
 
 
@@ -765,20 +448,10 @@ def run_strength_study(config_path) -> tuple[Path, dict, float]:
                 bootstrap["higher_order_fraction_limit"]
             ),
         )
-    source_paths = [
-        config_path,
-        Path(__file__).resolve(),
-        repo_root / "src/lorenz/core.py",
-        repo_root / "src/lorenz/ensemble.py",
-        repo_root / "src/lorenz/response.py",
-        repo_root
-        / config.get(
-            "runner_path", "experiments/run_strength_identifiability_pilot.py"
-        ),
-    ]
-    if "bootstrap" in config:
-        source_paths.append(repo_root / "src/lorenz/strength_bootstrap.py")
-    config_identifier = f"sha256:{_file_sha256(config_path)}"
+    runner_path = repo_root / config.get(
+        "runner_path", "experiments/run_strength_identifiability_pilot.py"
+    )
+    config_identifier = f"sha256:{file_sha256(config_path)}"
     timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     output_dir = repo_root / config["output_root"] / (
         f"{timestamp}_{config_identifier[7:19]}"
@@ -786,17 +459,9 @@ def run_strength_study(config_path) -> tuple[Path, dict, float]:
     runtime = time.perf_counter() - start
     provenance = {
         "config_identifier": config_identifier,
-        "code_identifiers": {
-            str(path.relative_to(repo_root)): f"sha256:{_file_sha256(path)}"
-            for path in source_paths
-        },
-        "git": _git_provenance(repo_root),
-        "environment": {
-            "python": sys.version,
-            "platform": platform.platform(),
-            "numpy": np.__version__,
-            "scipy": scipy.__version__,
-        },
+        "code_identifiers": active_source_identifiers(repo_root, runner_path),
+        "git": git_provenance(repo_root),
+        "environment": environment_provenance(),
         "runtime_seconds_before_persistence": runtime,
     }
     manifest = persist_strength_study(output_dir, data, derived, config, provenance)

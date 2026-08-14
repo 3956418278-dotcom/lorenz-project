@@ -9,35 +9,36 @@ No control-variate coefficient is trained on the evaluation blocks.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from hashlib import sha256
 import json
 import math
-import os
 from pathlib import Path
-import platform
-import subprocess
-import sys
 import time
 
 import numpy as np
-import scipy
 
-from .frequency_reconnaissance import (
-    FrequencyReconData,
-    _file_sha256,
-    _frequency_key,
-    _json_ready,
-    _single_frequency_config,
-    _validate_config,
-    _write_json_atomic,
+from .artifacts import (
+    active_source_identifiers,
+    environment_provenance,
+    file_sha256,
+    git_provenance,
+    write_json_atomic,
+    write_npz_atomic,
 )
-from .strength_bootstrap import _bootstrap_max_statistic, _magnitude_interval
-from .strength_identifiability import (
+from .strength_bootstrap import (
+    bootstrap_max_statistic,
+    complex_rectangle_magnitude_bounds,
+)
+from .strength_study import (
+    FrequencyStudyData,
     STATE_NAMES,
-    StrengthStudyData,
-    fit_block_power_series,
+    dc_components,
+    frequency_key,
     generate_strength_study,
+    second_harmonic_estimators,
+    single_frequency_strength_config,
+    validate_frequency_sampling_config,
 )
+from .strength_series import TARGET_ORDERS, fit_block_power_series
 
 
 SECOND_NULLS = np.array([True, True, False])
@@ -55,9 +56,9 @@ class VarianceFeatureGroup:
     contribution: str | None = None
 
 
-def generate_heldout_studies(config: dict, repo_root: Path) -> FrequencyReconData:
+def generate_heldout_studies(config: dict, repo_root: Path) -> FrequencyStudyData:
     """Integrate the frozen grid on block IDs disjoint from prior evidence."""
-    checked = _validate_config(config)
+    checked = validate_frequency_sampling_config(config)
     if (
         int(config["block_count"]) != config["block_count"]
         or int(config["observation_rule"]["minimum_cycles"])
@@ -79,11 +80,11 @@ def generate_heldout_studies(config: dict, repo_root: Path) -> FrequencyReconDat
             raise ValueError("held-out block IDs overlap declared prior evidence")
     prior = repo_root / config["holdout_contract"]["reconnaissance_artifact"]
     expected_hash = config["holdout_contract"]["reconnaissance_manifest_sha256"]
-    if _file_sha256(prior / "manifest.json") != expected_hash:
+    if file_sha256(prior / "manifest.json") != expected_hash:
         raise ValueError("reconnaissance manifest hash changed after design freeze")
     prior_manifest = json.loads((prior / "manifest.json").read_text(encoding="utf-8"))
     for name, recorded in prior_manifest["files"].items():
-        if f"sha256:{_file_sha256(prior / name)}" != recorded:
+        if f"sha256:{file_sha256(prior / name)}" != recorded:
             raise ValueError(f"reconnaissance artifact hash mismatch for {name}")
     with np.load(prior / "raw_frequency_summaries.npz", allow_pickle=False) as raw:
         prior_block_ids = set(int(value) for value in raw["block_ids"])
@@ -98,7 +99,7 @@ def generate_heldout_studies(config: dict, repo_root: Path) -> FrequencyReconDat
     for omega in checked["frequencies"]:
         start = time.perf_counter()
         study = generate_strength_study(
-            _single_frequency_config(config, omega, checked["cycles"][omega])
+            single_frequency_strength_config(config, omega, checked["cycles"][omega])
         )
         elapsed = time.perf_counter() - start
         if reference is None:
@@ -118,7 +119,7 @@ def generate_heldout_studies(config: dict, repo_root: Path) -> FrequencyReconDat
             "equivalent_runtime_seconds": elapsed,
         }
     assert reference is not None
-    return FrequencyReconData(
+    return FrequencyStudyData(
         block_ids=reference.block_ids,
         strengths=checked["strengths"],
         harmonics=checked["harmonics"],
@@ -127,36 +128,6 @@ def generate_heldout_studies(config: dict, repo_root: Path) -> FrequencyReconDat
         frequency_runtime_seconds=runtimes,
         source=sources,
     )
-
-
-def second_harmonic_estimators(study: StrengthStudyData) -> dict[str, np.ndarray]:
-    """Return current and frozen-alternative raw second-harmonic contrasts."""
-    harmonic_index = {int(value): index for index, value in enumerate(study.harmonics)}
-    index = harmonic_index[2]
-    positive = study.positive_cycle_fourier.mean(axis=-2)[..., index]
-    negative = study.negative_cycle_fourier.mean(axis=-2)[..., index]
-    unforced = study.unforced_cycle_fourier.mean(axis=-2)[..., index]
-    forced_even = (positive + negative) / 2
-    return {
-        "current_E2": forced_even - unforced[:, None],
-        "alternative_A2": forced_even,
-        "unforced_U2_diagnostic": unforced,
-    }
-
-
-def dc_components(study: StrengthStudyData) -> dict[str, np.ndarray]:
-    """Return forced-even, unforced, and required-subtraction DC components."""
-    harmonic_index = {int(value): index for index, value in enumerate(study.harmonics)}
-    index = harmonic_index[0]
-    positive = study.positive_cycle_fourier.mean(axis=-2)[..., index].real
-    negative = study.negative_cycle_fourier.mean(axis=-2)[..., index].real
-    unforced = study.unforced_cycle_fourier.mean(axis=-2)[..., index].real
-    forced_even = (positive + negative) / 2
-    return {
-        "forced_even_A0": forced_even,
-        "unforced_U0": unforced,
-        "current_E0": forced_even - unforced[:, None],
-    }
 
 
 def _bootstrap_indices(n_block: int, config: dict) -> tuple[np.ndarray, dict]:
@@ -195,7 +166,7 @@ def _simultaneous_transformed_intervals(
 
 
 def analyze_second_variance_ratios(
-    data: FrequencyReconData, config: dict, indices: np.ndarray
+    data: FrequencyStudyData, config: dict, indices: np.ndarray
 ) -> dict:
     """Simultaneous paired log variance-ratio analysis over the held-out grid."""
     entries = []
@@ -293,7 +264,7 @@ def analyze_second_variance_ratios(
     }
 
 
-def analyze_unforced_second_diagnostic(data: FrequencyReconData, config: dict) -> dict:
+def analyze_unforced_second_diagnostic(data: FrequencyStudyData, config: dict) -> dict:
     """Simultaneous held-out zero checks for retained unforced n=2 coefficients."""
     columns = []
     members = []
@@ -308,7 +279,7 @@ def analyze_unforced_second_diagnostic(data: FrequencyReconData, config: dict) -
             columns.append(values[:, observable].imag)
             members.append((omega, observable, "imaginary"))
     matrix = np.column_stack(columns)
-    mean, standard_error, maximum, metadata = _bootstrap_max_statistic(
+    mean, standard_error, maximum, metadata = bootstrap_max_statistic(
         matrix,
         resamples=int(config["resamples"]),
         root_entropy=config["root_entropy"],
@@ -395,7 +366,7 @@ def _append_complex(columns, groups, values, **metadata):
         )
 
 
-def _second_decision_family(data: FrequencyReconData):
+def _second_decision_family(data: FrequencyStudyData):
     columns = []
     groups = []
     for omega in data.frequencies:
@@ -413,11 +384,11 @@ def _second_decision_family(data: FrequencyReconData):
                 )
             for stop in range(3, len(data.strengths) + 1):
                 prefix = data.strengths[:stop]
-                fit = fit_block_power_series(values[:, :stop], prefix, (2, 4))
+                orders = TARGET_ORDERS["even_second_harmonic"]
+                fit = fit_block_power_series(values[:, :stop], prefix, orders)
                 upper = float(prefix[-1])
-                for contribution, coefficient_index, power in (
-                    ("low", 0, 2),
-                    ("higher", 1, 4),
+                for contribution, coefficient_index, power in zip(
+                    ("low", "higher"), range(len(orders)), orders
                 ):
                     _append_complex(
                         columns,
@@ -431,9 +402,9 @@ def _second_decision_family(data: FrequencyReconData):
     return np.column_stack(columns), groups
 
 
-def analyze_second_identification(data: FrequencyReconData, config: dict) -> dict:
+def analyze_second_identification(data: FrequencyStudyData, config: dict) -> dict:
     matrix, groups = _second_decision_family(data)
-    mean, standard_error, maximum, metadata = _bootstrap_max_statistic(
+    mean, standard_error, maximum, metadata = bootstrap_max_statistic(
         matrix,
         resamples=int(config["resamples"]),
         root_entropy=config["root_entropy"],
@@ -455,7 +426,9 @@ def analyze_second_identification(data: FrequencyReconData, config: dict) -> dic
             for group in frequency_groups:
                 if group.estimator != estimator:
                     continue
-                magnitude_lower, magnitude_upper = _magnitude_interval(group, lower, upper)
+                magnitude_lower, magnitude_upper = complex_rectangle_magnitude_bounds(
+                    group, lower, upper
+                )
                 record = {
                     "observable": STATE_NAMES[group.observable],
                     "structural_null": bool(SECOND_NULLS[group.observable]),
@@ -552,7 +525,7 @@ def _fisher_correlation(x, y, axis=0):
 
 
 def analyze_dc_variance(
-    data: FrequencyReconData, config: dict, indices: np.ndarray
+    data: FrequencyStudyData, config: dict, indices: np.ndarray
 ) -> dict:
     entries = []
     forced_columns = []
@@ -686,7 +659,7 @@ def analyze_dc_variance(
     }
 
 
-def analyze_variance_reduction(data: FrequencyReconData, config: dict) -> dict:
+def analyze_variance_reduction(data: FrequencyStudyData, config: dict) -> dict:
     bootstrap = config["bootstrap"]
     indices, index_metadata = _bootstrap_indices(len(data.block_ids), bootstrap)
     second_ratios = analyze_second_variance_ratios(data, bootstrap, indices)
@@ -737,7 +710,7 @@ def analyze_variance_reduction(data: FrequencyReconData, config: dict) -> dict:
     }
 
 
-def _raw_arrays(data: FrequencyReconData) -> dict:
+def _raw_arrays(data: FrequencyStudyData) -> dict:
     arrays = {
         "block_ids": np.asarray(data.block_ids, dtype=np.uint32),
         "strengths": data.strengths,
@@ -746,7 +719,7 @@ def _raw_arrays(data: FrequencyReconData) -> dict:
     }
     for omega in data.frequencies:
         study = data.studies[omega]
-        prefix = f"omega_{_frequency_key(omega)}"
+        prefix = f"omega_{frequency_key(omega)}"
         arrays[f"{prefix}_positive_cycle_fourier"] = study.positive_cycle_fourier
         arrays[f"{prefix}_negative_cycle_fourier"] = study.negative_cycle_fourier
         arrays[f"{prefix}_unforced_cycle_fourier"] = study.unforced_cycle_fourier
@@ -756,33 +729,21 @@ def _raw_arrays(data: FrequencyReconData) -> dict:
     return arrays
 
 
-def _git_provenance(repo_root: Path) -> dict:
-    head = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repo_root, text=True, capture_output=True)
-    status = subprocess.run(("git", "status", "--short"), cwd=repo_root, text=True, capture_output=True)
-    return {
-        "head": head.stdout.strip() if head.returncode == 0 else None,
-        "worktree_dirty": bool(status.stdout.strip()) if status.returncode == 0 else None,
-    }
-
-
 def persist_variance_reduction(output_dir, data, derived, config, provenance) -> dict:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
     config_path = output_dir / "config_snapshot.json"
     raw_path = output_dir / "raw_frequency_summaries.npz"
     derived_path = output_dir / "derived_diagnostics.json"
-    _write_json_atomic(config_path, config)
-    temporary = raw_path.with_suffix(".npz.tmp")
-    with temporary.open("wb") as stream:
-        np.savez_compressed(stream, **_raw_arrays(data))
-    os.replace(temporary, raw_path)
-    _write_json_atomic(derived_path, derived)
+    write_json_atomic(config_path, config)
+    write_npz_atomic(raw_path, _raw_arrays(data))
+    write_json_atomic(derived_path, derived)
     manifest = {
         "schema_version": 1,
         "classification": "exploratory_heldout_variance_reduction",
         "study_id": config["study_id"],
         "files": {
-            path.name: f"sha256:{_file_sha256(path)}"
+            path.name: f"sha256:{file_sha256(path)}"
             for path in (config_path, raw_path, derived_path)
         },
         "array_semantics": {
@@ -803,7 +764,7 @@ def persist_variance_reduction(output_dir, data, derived, config, provenance) ->
         "provenance": provenance,
         "interpretation": derived["interpretation"],
     }
-    _write_json_atomic(output_dir / "manifest.json", manifest)
+    write_json_atomic(output_dir / "manifest.json", manifest)
     return manifest
 
 
@@ -814,32 +775,16 @@ def run_variance_reduction(config_path) -> tuple[Path, dict, float]:
     repo_root = Path(__file__).resolve().parents[2]
     data = generate_heldout_studies(config, repo_root)
     derived = analyze_variance_reduction(data, config)
-    sources = [
-        config_path,
-        Path(__file__).resolve(),
-        repo_root / "src/lorenz/frequency_reconnaissance.py",
-        repo_root / "src/lorenz/strength_identifiability.py",
-        repo_root / "src/lorenz/strength_bootstrap.py",
-        repo_root / "src/lorenz/core.py",
-        repo_root / "src/lorenz/ensemble.py",
-        repo_root / config["runner_path"],
-    ]
-    config_identifier = f"sha256:{_file_sha256(config_path)}"
+    runner_path = repo_root / config["runner_path"]
+    config_identifier = f"sha256:{file_sha256(config_path)}"
     output_dir = repo_root / config["output_root"] / (
         f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}_{config_identifier[7:19]}"
     )
     provenance = {
         "config_identifier": config_identifier,
-        "code_identifiers": {
-            str(path.relative_to(repo_root)): f"sha256:{_file_sha256(path)}" for path in sources
-        },
-        "git": _git_provenance(repo_root),
-        "environment": {
-            "python": sys.version,
-            "platform": platform.platform(),
-            "numpy": np.__version__,
-            "scipy": scipy.__version__,
-        },
+        "code_identifiers": active_source_identifiers(repo_root, runner_path),
+        "git": git_provenance(repo_root),
+        "environment": environment_provenance(),
         "runtime_seconds_before_persistence": time.perf_counter() - start,
     }
     manifest = persist_variance_reduction(output_dir, data, derived, config, provenance)

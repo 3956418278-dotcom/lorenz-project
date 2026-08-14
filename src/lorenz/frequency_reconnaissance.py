@@ -8,134 +8,39 @@ the shared block row across the complete frequency family.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from hashlib import sha256
 import json
 import math
-import os
 from pathlib import Path
-import platform
-import subprocess
-import sys
 import time
 
 import numpy as np
-import scipy
 
-from .strength_bootstrap import (
-    TARGET_ORDERS,
-    _bootstrap_max_statistic,
-    _magnitude_interval,
-    build_decision_family,
+from .artifacts import (
+    active_source_identifiers,
+    environment_provenance,
+    file_sha256,
+    git_provenance,
+    write_json_atomic,
+    write_npz_atomic,
 )
-from .strength_identifiability import (
+from .strength_bootstrap import (
+    bootstrap_max_statistic,
+    build_decision_family,
+    complex_rectangle_magnitude_bounds,
+)
+from .strength_study import (
+    FrequencyStudyData,
     STATE_NAMES,
     StrengthStudyData,
-    _harmonic_role,
+    frequency_key,
     generate_strength_study,
+    harmonic_role,
+    minimum_duration_cycle_count,
+    single_frequency_strength_config,
     strength_target_contrasts,
+    validate_frequency_sampling_config,
 )
-
-
-@dataclass(frozen=True)
-class FrequencyReconData:
-    """Crossed block summaries keyed by forcing frequency."""
-
-    block_ids: tuple[int, ...]
-    strengths: np.ndarray
-    harmonics: np.ndarray
-    frequencies: tuple[float, ...]
-    studies: dict[float, StrengthStudyData]
-    frequency_runtime_seconds: dict[float, float]
-    source: dict[float, dict]
-
-
-def observation_cycle_count(
-    omega: float, minimum_cycles: int, minimum_physical_time: float
-) -> int:
-    """Smallest integer cycle count satisfying both reconnaissance floors."""
-    if not np.isfinite(omega) or omega <= 0:
-        raise ValueError("omega must be finite and positive")
-    if isinstance(minimum_cycles, (bool, np.bool_)) or minimum_cycles < 1:
-        raise ValueError("minimum_cycles must be a positive integer")
-    if int(minimum_cycles) != minimum_cycles:
-        raise ValueError("minimum_cycles must be a positive integer")
-    if not np.isfinite(minimum_physical_time) or minimum_physical_time <= 0:
-        raise ValueError("minimum_physical_time must be finite and positive")
-    time_cycles = math.ceil(minimum_physical_time * omega / (2 * np.pi))
-    return max(int(minimum_cycles), time_cycles)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _json_ready(value):
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, tuple):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, dict):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_ready(item) for item in value]
-    return value
-
-
-def _write_json_atomic(path: Path, value) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(_json_ready(value), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
-
-
-def _frequency_key(omega: float) -> str:
-    return format(float(omega), ".12g").replace("-", "m").replace(".", "p")
-
-
-def _validate_config(config: dict) -> dict:
-    frequencies = tuple(float(value) for value in config["frequencies"])
-    if (
-        len(frequencies) < 2
-        or any(not np.isfinite(value) or value <= 0 for value in frequencies)
-        or tuple(sorted(frequencies)) != frequencies
-        or len(set(frequencies)) != len(frequencies)
-    ):
-        raise ValueError("frequencies must be distinct, positive, and increasing")
-    strengths = np.asarray(config["strengths"], dtype=float)
-    harmonics = np.asarray(config["harmonics"], dtype=int)
-    block_count = int(config["block_count"])
-    minimum_cycles = int(config["observation_rule"]["minimum_cycles"])
-    minimum_time = float(
-        config["observation_rule"]["minimum_physical_time"]
-    )
-    cycles = {
-        omega: observation_cycle_count(omega, minimum_cycles, minimum_time)
-        for omega in frequencies
-    }
-    if block_count < 2:
-        raise ValueError("block_count must be at least two")
-    if strengths.ndim != 1 or len(strengths) < 3 or np.any(np.diff(strengths) <= 0):
-        raise ValueError("strengths must contain at least three increasing values")
-    if harmonics.ndim != 1 or not {0, 1, 2}.issubset(set(harmonics.tolist())):
-        raise ValueError("harmonics must include 0, 1, and 2")
-    return {
-        "frequencies": frequencies,
-        "strengths": strengths,
-        "harmonics": harmonics,
-        "block_count": block_count,
-        "cycles": cycles,
-    }
+from .strength_series import TARGET_ORDERS
 
 
 def _validate_parent_artifact(
@@ -149,15 +54,15 @@ def _validate_parent_artifact(
         (parent_dir / "config_snapshot.json").read_text(encoding="utf-8")
     )
     expected_manifest_hash = reuse.get("manifest_sha256")
-    if expected_manifest_hash and _file_sha256(manifest_path) != expected_manifest_hash:
+    if expected_manifest_hash and file_sha256(manifest_path) != expected_manifest_hash:
         raise ValueError("parent manifest hash does not match the configured hash")
     for name, recorded in manifest["files"].items():
-        actual = f"sha256:{_file_sha256(parent_dir / name)}"
+        actual = f"sha256:{file_sha256(parent_dir / name)}"
         if actual != recorded:
             raise ValueError(f"parent artifact hash mismatch for {name}")
     for relative, recorded in manifest["provenance"]["code_identifiers"].items():
         path = repo_root / relative
-        actual = f"sha256:{_file_sha256(path)}"
+        actual = f"sha256:{file_sha256(path)}"
         if actual != recorded:
             raise ValueError(
                 f"current code no longer matches parent provenance for {relative}"
@@ -308,7 +213,7 @@ def _study_from_parent(
     source = {
         "mode": "validated_parent_subset",
         "artifact": config["reuse_parent_frequency"]["artifact"],
-        "manifest_sha256": _file_sha256(
+        "manifest_sha256": file_sha256(
             repo_root / config["reuse_parent_frequency"]["artifact"] / "manifest.json"
         ),
         "raw_sha256": manifest["files"]["raw_fourier_summaries.npz"],
@@ -320,29 +225,9 @@ def _study_from_parent(
     return data, source
 
 
-def _single_frequency_config(config: dict, omega: float, n_cycle: int) -> dict:
-    return {
-        "strengths": config["strengths"],
-        "harmonics": config["harmonics"],
-        "discard_time": config["discard_time"],
-        "n_cycle": n_cycle,
-        "n_phase": config["n_phase"],
-        "block_count": config["block_count"],
-        "workers": config.get("workers", 1),
-        "lorenz": config["lorenz"],
-        "solver": config["solver"],
-        "initial_ensemble": config["initial_ensemble"],
-        "protocol": {
-            "omega": omega,
-            "direction": config["protocol"]["direction"],
-            "phase": float(config["protocol"].get("phase", 0.0)),
-        },
-    }
-
-
-def generate_frequency_reconnaissance(config: dict, repo_root: Path) -> FrequencyReconData:
+def generate_frequency_reconnaissance(config: dict, repo_root: Path) -> FrequencyStudyData:
     """Generate new frequencies and validate/reuse the declared parent subset."""
-    checked = _validate_config(config)
+    checked = validate_frequency_sampling_config(config)
     reuse_omega = float(config["reuse_parent_frequency"]["omega"])
     if reuse_omega not in checked["frequencies"]:
         raise ValueError("reuse frequency must belong to the configured grid")
@@ -359,7 +244,7 @@ def generate_frequency_reconnaissance(config: dict, repo_root: Path) -> Frequenc
             continue
         start = time.perf_counter()
         study = generate_strength_study(
-            _single_frequency_config(config, omega, checked["cycles"][omega])
+            single_frequency_strength_config(config, omega, checked["cycles"][omega])
         )
         elapsed = time.perf_counter() - start
         if study.block_ids != parent.block_ids:
@@ -375,7 +260,7 @@ def generate_frequency_reconnaissance(config: dict, repo_root: Path) -> Frequenc
             "new_runtime_seconds": elapsed,
             "equivalent_runtime_seconds": elapsed,
         }
-    return FrequencyReconData(
+    return FrequencyStudyData(
         block_ids=parent.block_ids,
         strengths=checked["strengths"],
         harmonics=checked["harmonics"],
@@ -462,7 +347,7 @@ def _required_information_multiplier(values: np.ndarray, critical: float) -> flo
     return min(candidates) if candidates else None
 
 
-def _target_reports(data: FrequencyReconData, critical: float) -> dict:
+def _target_reports(data: FrequencyStudyData, critical: float) -> dict:
     reports = {}
     for omega in data.frequencies:
         study = data.studies[omega]
@@ -515,7 +400,7 @@ def _target_reports(data: FrequencyReconData, critical: float) -> dict:
     return reports
 
 
-def _multi_frequency_bootstrap(data: FrequencyReconData, config: dict) -> dict:
+def _multi_frequency_bootstrap(data: FrequencyStudyData, config: dict) -> dict:
     bootstrap = config["bootstrap"]
     nulls = bootstrap["structural_null_outputs"]
     matrices = []
@@ -538,7 +423,7 @@ def _multi_frequency_bootstrap(data: FrequencyReconData, config: dict) -> dict:
         }
         offset += matrix.shape[1]
     family = np.concatenate(matrices, axis=1)
-    mean, standard_error, statistics, metadata = _bootstrap_max_statistic(
+    mean, standard_error, statistics, metadata = bootstrap_max_statistic(
         family,
         resamples=int(bootstrap["resamples"]),
         root_entropy=bootstrap["root_entropy"],
@@ -567,7 +452,9 @@ def _multi_frequency_bootstrap(data: FrequencyReconData, config: dict) -> dict:
                     ),
                 }
             )
-            magnitude_lower, magnitude_upper = _magnitude_interval(group, lower, upper)
+            magnitude_lower, magnitude_upper = complex_rectangle_magnitude_bounds(
+                group, lower, upper
+            )
             record = {
                 "observable": STATE_NAMES[group.observable],
                 "structural_null": bool(group.structural_null),
@@ -681,7 +568,7 @@ def _multi_frequency_bootstrap(data: FrequencyReconData, config: dict) -> dict:
     }
 
 
-def _non_target_diagnostics(data: FrequencyReconData, critical: float) -> dict:
+def _non_target_diagnostics(data: FrequencyStudyData, critical: float) -> dict:
     result = {}
     for omega in data.frequencies:
         study = data.studies[omega]
@@ -695,7 +582,7 @@ def _non_target_diagnostics(data: FrequencyReconData, critical: float) -> dict:
         entries = []
         for contrast_name, values in contrasts.items():
             for harmonic_index, harmonic in enumerate(study.harmonics):
-                role = _harmonic_role(contrast_name, int(harmonic))
+                role = harmonic_role(contrast_name, int(harmonic))
                 if role == "target":
                     continue
                 for strength_index, strength in enumerate(study.strengths):
@@ -726,7 +613,7 @@ def _non_target_diagnostics(data: FrequencyReconData, critical: float) -> dict:
     return result
 
 
-def analyze_frequency_reconnaissance(data: FrequencyReconData, config: dict) -> dict:
+def analyze_frequency_reconnaissance(data: FrequencyStudyData, config: dict) -> dict:
     joint = _multi_frequency_bootstrap(data, config)
     critical = joint["coverage"]["critical_value"]
     target_reports = _target_reports(data, critical)
@@ -780,7 +667,7 @@ def analyze_frequency_reconnaissance(data: FrequencyReconData, config: dict) -> 
     }
 
 
-def _raw_arrays(data: FrequencyReconData) -> dict:
+def _raw_arrays(data: FrequencyStudyData) -> dict:
     arrays = {
         "block_ids": np.asarray(data.block_ids, dtype=np.uint32),
         "strengths": data.strengths,
@@ -789,7 +676,7 @@ def _raw_arrays(data: FrequencyReconData) -> dict:
     }
     for omega in data.frequencies:
         study = data.studies[omega]
-        prefix = f"omega_{_frequency_key(omega)}"
+        prefix = f"omega_{frequency_key(omega)}"
         arrays[f"{prefix}_positive_cycle_fourier"] = study.positive_cycle_fourier
         arrays[f"{prefix}_negative_cycle_fourier"] = study.negative_cycle_fourier
         arrays[f"{prefix}_unforced_cycle_fourier"] = study.unforced_cycle_fourier
@@ -801,22 +688,9 @@ def _raw_arrays(data: FrequencyReconData) -> dict:
     return arrays
 
 
-def _git_provenance(repo_root: Path) -> dict:
-    head = subprocess.run(
-        ("git", "rev-parse", "HEAD"), cwd=repo_root, text=True, capture_output=True
-    )
-    status = subprocess.run(
-        ("git", "status", "--short"), cwd=repo_root, text=True, capture_output=True
-    )
-    return {
-        "head": head.stdout.strip() if head.returncode == 0 else None,
-        "worktree_dirty": bool(status.stdout.strip()) if status.returncode == 0 else None,
-    }
-
-
 def persist_frequency_reconnaissance(
     output_dir: Path,
-    data: FrequencyReconData,
+    data: FrequencyStudyData,
     derived: dict,
     config: dict,
     provenance: dict,
@@ -825,19 +699,16 @@ def persist_frequency_reconnaissance(
     config_path = output_dir / "config_snapshot.json"
     raw_path = output_dir / "raw_frequency_summaries.npz"
     derived_path = output_dir / "derived_diagnostics.json"
-    _write_json_atomic(config_path, config)
-    temporary = raw_path.with_suffix(".npz.tmp")
-    with temporary.open("wb") as stream:
-        np.savez_compressed(stream, **_raw_arrays(data))
-    os.replace(temporary, raw_path)
-    _write_json_atomic(derived_path, derived)
+    write_json_atomic(config_path, config)
+    write_npz_atomic(raw_path, _raw_arrays(data))
+    write_json_atomic(derived_path, derived)
     manifest = {
         "schema_version": 1,
         "classification": "exploratory_frequency_reconnaissance",
         "study_id": config["study_id"],
         "protocol_status": "provisional_design_diagnostic_only",
         "files": {
-            path.name: f"sha256:{_file_sha256(path)}"
+            path.name: f"sha256:{file_sha256(path)}"
             for path in (config_path, raw_path, derived_path)
         },
         "array_semantics": {
@@ -868,7 +739,7 @@ def persist_frequency_reconnaissance(
         "interpretation": derived["interpretation"],
     }
     manifest_path = output_dir / "manifest.json"
-    _write_json_atomic(manifest_path, manifest)
+    write_json_atomic(manifest_path, manifest)
     return manifest
 
 
@@ -879,32 +750,16 @@ def run_frequency_reconnaissance(config_path) -> tuple[Path, dict, float]:
     repo_root = Path(__file__).resolve().parents[2]
     data = generate_frequency_reconnaissance(config, repo_root)
     derived = analyze_frequency_reconnaissance(data, config)
-    source_paths = [
-        config_path,
-        Path(__file__).resolve(),
-        repo_root / "src/lorenz/strength_identifiability.py",
-        repo_root / "src/lorenz/strength_bootstrap.py",
-        repo_root / "src/lorenz/core.py",
-        repo_root / "src/lorenz/ensemble.py",
-        repo_root / config["runner_path"],
-    ]
-    config_identifier = f"sha256:{_file_sha256(config_path)}"
+    runner_path = repo_root / config["runner_path"]
+    config_identifier = f"sha256:{file_sha256(config_path)}"
     output_dir = repo_root / config["output_root"] / (
         f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}_{config_identifier[7:19]}"
     )
     provenance = {
         "config_identifier": config_identifier,
-        "code_identifiers": {
-            str(path.relative_to(repo_root)): f"sha256:{_file_sha256(path)}"
-            for path in source_paths
-        },
-        "git": _git_provenance(repo_root),
-        "environment": {
-            "python": sys.version,
-            "platform": platform.platform(),
-            "numpy": np.__version__,
-            "scipy": scipy.__version__,
-        },
+        "code_identifiers": active_source_identifiers(repo_root, runner_path),
+        "git": git_provenance(repo_root),
+        "environment": environment_provenance(),
         "runtime_seconds_before_persistence": time.perf_counter() - start,
     }
     manifest = persist_frequency_reconnaissance(

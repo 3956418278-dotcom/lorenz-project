@@ -7,24 +7,25 @@ use the leading block axis as the independent unit.
 
 from __future__ import annotations
 
-from hashlib import sha256
 import json
 import math
-import os
 from pathlib import Path
-import platform
-import subprocess
-import sys
 import time
 
 import numpy as np
-import scipy
 
+from .artifacts import (
+    active_source_identifiers,
+    environment_provenance,
+    file_sha256,
+    git_provenance,
+    write_json_atomic,
+)
 from .strength_bootstrap import (
-    TARGET_ORDERS,
     analyze_block_bootstrap,
     build_decision_family,
 )
+from .strength_series import TARGET_ORDERS
 
 
 def _target_cycles(raw) -> tuple[np.ndarray, dict[str, np.ndarray]]:
@@ -240,7 +241,15 @@ def _compact_bootstrap(result) -> dict:
     }
 
 
-def _coordinate_bounds(mean, standard_error, alpha, critical, cycles, group):
+def _coordinate_bounds(
+    mean,
+    standard_error,
+    alpha,
+    critical,
+    cycles,
+    reference_observation_cycles,
+    group,
+):
     bounds = []
     indices = [group.real_index]
     if group.imaginary_index is not None:
@@ -249,7 +258,7 @@ def _coordinate_bounds(mean, standard_error, alpha, critical, cycles, group):
         half_width = (
             critical
             * standard_error[index]
-            * (cycles / 64.0) ** (-alpha[index] / 2)
+            * (cycles / reference_observation_cycles) ** (-alpha[index] / 2)
         )
         lower = mean[index] - half_width
         upper = mean[index] + half_width
@@ -280,7 +289,17 @@ def _coordinate_bounds_scale(mean, standard_error, critical, scale, group):
     )
 
 
-def _projected_ratio(mean, standard_error, alpha, critical, groups, target, upper, cycles):
+def _projected_ratio(
+    mean,
+    standard_error,
+    alpha,
+    critical,
+    groups,
+    target,
+    upper,
+    cycles,
+    reference_observation_cycles,
+):
     selected = [
         group
         for group in groups
@@ -290,12 +309,28 @@ def _projected_ratio(mean, standard_error, alpha, critical, groups, target, uppe
         and not group.structural_null
     ]
     low = max(
-        _coordinate_bounds(mean, standard_error, alpha, critical, cycles, group)[0]
+        _coordinate_bounds(
+            mean,
+            standard_error,
+            alpha,
+            critical,
+            cycles,
+            reference_observation_cycles,
+            group,
+        )[0]
         for group in selected
         if group.contribution == "low"
     )
     higher = max(
-        _coordinate_bounds(mean, standard_error, alpha, critical, cycles, group)[1]
+        _coordinate_bounds(
+            mean,
+            standard_error,
+            alpha,
+            critical,
+            cycles,
+            reference_observation_cycles,
+            group,
+        )[1]
         for group in selected
         if group.contribution == "higher"
     )
@@ -311,13 +346,22 @@ def _required_cycles(
     target,
     upper,
     limit,
+    reference_observation_cycles,
 ):
     point_ratio = _projected_ratio(
-        mean, standard_error, alpha, critical, groups, target, upper, 1e15
+        mean,
+        standard_error,
+        alpha,
+        critical,
+        groups,
+        target,
+        upper,
+        1e15,
+        reference_observation_cycles,
     )
     if point_ratio >= limit:
         return point_ratio, None
-    lower = 64.0
+    lower = float(reference_observation_cycles)
     upper_cycles = lower
     while (
         _projected_ratio(
@@ -329,6 +373,7 @@ def _required_cycles(
             target,
             upper,
             upper_cycles,
+            reference_observation_cycles,
         )
         > limit
         and upper_cycles < 1e9
@@ -345,6 +390,7 @@ def _required_cycles(
             target,
             upper,
             middle,
+            reference_observation_cycles,
         )
         if ratio <= limit:
             upper_cycles = middle
@@ -560,7 +606,7 @@ def analyze_observation_efficiency(raw, config, parent_manifest) -> dict:
                         standard_error[indices] / upper**order
                     ),
                     "variance_exponent_alpha": alpha[indices],
-                    "correlation_inflation_at_64_cycles": variance_inflation[
+                    "correlation_inflation_at_reference_cycles": variance_inflation[
                         -1, indices
                     ],
                 }
@@ -575,6 +621,7 @@ def analyze_observation_efficiency(raw, config, parent_manifest) -> dict:
             target,
             upper,
             limit,
+            n_cycle,
         )
         projected_ratios = {
             str(int(length)): _projected_ratio(
@@ -586,6 +633,7 @@ def analyze_observation_efficiency(raw, config, parent_manifest) -> dict:
                 target,
                 upper,
                 float(length),
+                n_cycle,
             )
             for length in config["projection_cycle_options"]
         }
@@ -681,6 +729,7 @@ def analyze_observation_efficiency(raw, config, parent_manifest) -> dict:
         "family": {
             "block_count": n_block,
             "cycle_count": n_cycle,
+            "reference_observation_cycles": n_cycle,
             "scalar_coordinate_count": n_feature,
             "members": [_feature_dict(feature) for feature in scalar_features],
         },
@@ -704,11 +753,11 @@ def analyze_observation_efficiency(raw, config, parent_manifest) -> dict:
         "nested_prefix_bootstrap": nested,
         "adequacy_resource_projection": {
             "assumptions": (
-                "Full-64-cycle point estimates and max-statistic critical value "
+                f"Full-{n_cycle}-cycle point estimates and max-statistic critical value "
                 "are held fixed. Each scalar SE is extrapolated with its empirical "
                 "non-overlapping-window variance exponent fitted on configured "
                 "cycle lengths. This is a resource projection, not coverage "
-                "evidence beyond the observed 64 cycles."
+                f"evidence beyond the observed {n_cycle} cycles."
             ),
             "candidates": projections,
             "candidate_feature_scaling": candidate_feature_scaling,
@@ -731,37 +780,24 @@ def analyze_observation_efficiency(raw, config, parent_manifest) -> dict:
     }
 
 
-def _json_ready(value):
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, tuple):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, dict):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_ready(item) for item in value]
-    return value
-
-
-def _write_json_atomic(path: Path, value) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(_json_ready(value), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _validate_reference_observation_cycles(parent_config, raw) -> int:
+    """Match the declared parent observation length to retained raw summaries."""
+    declared = parent_config.get("n_cycle")
+    if (
+        isinstance(declared, (bool, np.bool_))
+        or not isinstance(declared, (int, np.integer))
+        or declared <= 0
+    ):
+        raise ValueError("parent n_cycle must be a positive integer")
+    positive = np.asarray(raw["positive_cycle_fourier"])
+    if positive.ndim != 5:
+        raise ValueError("parent positive cycle summaries must have five axes")
+    retained = int(positive.shape[-2])
+    if int(declared) != retained:
+        raise ValueError(
+            "parent config n_cycle does not match raw observation cycle axis"
+        )
+    return retained
 
 
 def run_observation_efficiency_study(config_path) -> tuple[Path, dict, float]:
@@ -777,11 +813,11 @@ def run_observation_efficiency_study(config_path) -> tuple[Path, dict, float]:
     parent_manifest = json.loads(parent_manifest_path.read_text(encoding="utf-8"))
     parent_config = json.loads(parent_config_path.read_text(encoding="utf-8"))
     if parent_manifest["files"]["config_snapshot.json"] != (
-        f"sha256:{_file_sha256(parent_config_path)}"
+        f"sha256:{file_sha256(parent_config_path)}"
     ):
         raise ValueError("parent config hash does not match its manifest")
     if parent_manifest["files"]["raw_fourier_summaries.npz"] != (
-        f"sha256:{_file_sha256(parent_raw_path)}"
+        f"sha256:{file_sha256(parent_raw_path)}"
     ):
         raise ValueError("parent raw Fourier hash does not match its manifest")
     compatibility = {
@@ -800,12 +836,13 @@ def run_observation_efficiency_study(config_path) -> tuple[Path, dict, float]:
         "src/lorenz/strength_identifiability.py",
     ):
         expected = parent_manifest["provenance"]["code_identifiers"][relative]
-        if expected != f"sha256:{_file_sha256(repo_root / relative)}":
+        if expected != f"sha256:{file_sha256(repo_root / relative)}":
             raise ValueError(f"current {relative} does not match parent provenance")
     with np.load(parent_raw_path) as raw:
+        _validate_reference_observation_cycles(parent_config, raw)
         derived = analyze_observation_efficiency(raw, config, parent_manifest)
 
-    config_identifier = f"sha256:{_file_sha256(config_path)}"
+    config_identifier = f"sha256:{file_sha256(config_path)}"
     timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     output_dir = repo_root / config["output_root"] / (
         f"{timestamp}_{config_identifier[7:19]}"
@@ -813,56 +850,36 @@ def run_observation_efficiency_study(config_path) -> tuple[Path, dict, float]:
     output_dir.mkdir(parents=True, exist_ok=False)
     config_output = output_dir / "config_snapshot.json"
     derived_output = output_dir / "derived_diagnostics.json"
-    _write_json_atomic(config_output, config)
-    _write_json_atomic(derived_output, derived)
+    write_json_atomic(config_output, config)
+    write_json_atomic(derived_output, derived)
 
-    source_paths = [
-        config_path,
-        Path(__file__).resolve(),
-        repo_root / "src/lorenz/strength_bootstrap.py",
-        repo_root / "src/lorenz/strength_identifiability.py",
-        repo_root / config["runner_path"],
-    ]
-    git = subprocess.run(
-        ("git", "rev-parse", "HEAD"),
-        cwd=repo_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    runner_path = repo_root / config["runner_path"]
+    git = git_provenance(repo_root)
     runtime = time.perf_counter() - start
     manifest = {
         "schema_version": 1,
         "classification": "exploratory_reanalysis",
         "study_id": config["study_id"],
         "files": {
-            "config_snapshot.json": f"sha256:{_file_sha256(config_output)}",
-            "derived_diagnostics.json": f"sha256:{_file_sha256(derived_output)}",
+            "config_snapshot.json": f"sha256:{file_sha256(config_output)}",
+            "derived_diagnostics.json": f"sha256:{file_sha256(derived_output)}",
         },
         "parent_artifact": {
             "path": config["parent_artifact"],
-            "manifest": f"sha256:{_file_sha256(parent_manifest_path)}",
-            "config_snapshot": f"sha256:{_file_sha256(parent_config_path)}",
-            "raw_fourier_summaries": f"sha256:{_file_sha256(parent_raw_path)}",
+            "manifest": f"sha256:{file_sha256(parent_manifest_path)}",
+            "config_snapshot": f"sha256:{file_sha256(parent_config_path)}",
+            "raw_fourier_summaries": f"sha256:{file_sha256(parent_raw_path)}",
             "compatibility_checks": compatibility,
         },
         "provenance": {
             "config_identifier": config_identifier,
-            "code_identifiers": {
-                str(path.relative_to(repo_root)): f"sha256:{_file_sha256(path)}"
-                for path in source_paths
-            },
-            "git_head": git.stdout.strip() if git.returncode == 0 else None,
-            "environment": {
-                "python": sys.version,
-                "platform": platform.platform(),
-                "numpy": np.__version__,
-                "scipy": scipy.__version__,
-            },
+            "code_identifiers": active_source_identifiers(repo_root, runner_path),
+            "git_head": git["head"],
+            "environment": environment_provenance(),
             "runtime_seconds_before_persistence": runtime,
         },
         "interpretation": derived["interpretation"],
     }
     manifest_output = output_dir / "manifest.json"
-    _write_json_atomic(manifest_output, manifest)
+    write_json_atomic(manifest_output, manifest)
     return output_dir, manifest, time.perf_counter() - start

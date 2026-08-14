@@ -2,9 +2,11 @@ import numpy as np
 import pytest
 
 from lorenz.strength_bootstrap import (
-    _bootstrap_max_statistic,
+    ComplexFeatureGroup,
     analyze_block_bootstrap,
+    bootstrap_max_statistic,
     build_decision_family,
+    complex_rectangle_magnitude_bounds,
 )
 
 
@@ -60,7 +62,7 @@ def test_decision_family_declares_all_210_scalar_coordinates():
 def test_bootstrap_uses_one_index_draw_for_joint_columns():
     values = np.arange(20, dtype=float)
     samples = np.column_stack((values, 10 * values))
-    mean, standard_error, statistics, metadata = _bootstrap_max_statistic(
+    mean, standard_error, statistics, metadata = bootstrap_max_statistic(
         samples, resamples=199, root_entropy=123, batch_size=17
     )
 
@@ -68,6 +70,19 @@ def test_bootstrap_uses_one_index_draw_for_joint_columns():
     np.testing.assert_allclose(standard_error[1], 10 * standard_error[0])
     assert np.isfinite(statistics).all()
     assert metadata["bit_generator"] == "PCG64DXSM"
+
+
+def test_public_complex_magnitude_bounds_use_the_coordinate_rectangle():
+    group = ComplexFeatureGroup("identification", "target", 0, 0, 1)
+    lower = np.array([-1.0, 3.0])
+    upper = np.array([2.0, 4.0])
+
+    magnitude_lower, magnitude_upper = complex_rectangle_magnitude_bounds(
+        group, lower, upper
+    )
+
+    assert magnitude_lower == 3.0
+    np.testing.assert_allclose(magnitude_upper, np.hypot(2.0, 4.0))
 
 
 def test_simultaneous_analysis_separates_identification_and_adequacy():

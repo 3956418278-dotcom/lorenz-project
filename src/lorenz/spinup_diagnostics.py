@@ -4,20 +4,22 @@ from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from hashlib import sha256
 from itertools import combinations
 import json
-import os
 from pathlib import Path
-import platform
-import subprocess
-import sys
 import time
 
 import numpy as np
-import scipy
 from scipy.integrate import solve_ivp
 
+from .artifacts import (
+    active_source_identifiers,
+    environment_provenance,
+    file_sha256,
+    git_provenance,
+    write_json_atomic,
+    write_npz_atomic,
+)
 from .core import check_solution, lorenz_rhs
 from .ensemble import SymmetricXYUniformProposal, generate_initial_state_blocks
 
@@ -509,39 +511,6 @@ def generate_spinup_study(config: dict) -> SpinupStudyData:
     )
 
 
-def _json_ready(value):
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, tuple):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, dict):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_ready(item) for item in value]
-    return value
-
-
-def _write_json_atomic(path: Path, value) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(_json_ready(value), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def persist_spinup_study(
     output_dir,
     data: SpinupStudyData,
@@ -555,8 +524,7 @@ def persist_spinup_study(
     config_path = output_dir / "config_snapshot.json"
     raw_path = output_dir / "raw_endpoints.npz"
     derived_path = output_dir / "derived_diagnostics.json"
-    _write_json_atomic(config_path, config)
-    temporary_raw = raw_path.with_suffix(".npz.tmp")
+    write_json_atomic(config_path, config)
     arrays = {
         "proposal_names": np.asarray(data.proposal_names),
         "burnin_times": data.burnin_times,
@@ -567,18 +535,16 @@ def persist_spinup_study(
     }
     if data.batch_ids is not None:
         arrays["batch_ids"] = data.batch_ids
-    with temporary_raw.open("wb") as stream:
-        np.savez_compressed(stream, **arrays)
-    os.replace(temporary_raw, raw_path)
-    _write_json_atomic(derived_path, derived)
+    write_npz_atomic(raw_path, arrays)
+    write_json_atomic(derived_path, derived)
     manifest = {
         "schema_version": 1,
         "classification": "exploratory",
         "study_id": config["study_id"],
         "files": {
-            "config_snapshot.json": f"sha256:{_file_sha256(config_path)}",
-            "raw_endpoints.npz": f"sha256:{_file_sha256(raw_path)}",
-            "derived_diagnostics.json": f"sha256:{_file_sha256(derived_path)}",
+            "config_snapshot.json": f"sha256:{file_sha256(config_path)}",
+            "raw_endpoints.npz": f"sha256:{file_sha256(raw_path)}",
+            "derived_diagnostics.json": f"sha256:{file_sha256(derived_path)}",
         },
         "array_semantics": {
             "block_ids": "proposal, block",
@@ -595,25 +561,8 @@ def persist_spinup_study(
         "interpretation": derived["interpretation"],
     }
     manifest_path = output_dir / "manifest.json"
-    _write_json_atomic(manifest_path, manifest)
+    write_json_atomic(manifest_path, manifest)
     return manifest
-
-
-def _git_provenance(repo_root: Path) -> dict:
-    def run(*arguments):
-        result = subprocess.run(
-            arguments,
-            cwd=repo_root,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        return result.stdout.strip() if result.returncode == 0 else None
-
-    return {
-        "head": run("git", "rev-parse", "HEAD"),
-        "worktree_dirty": bool(run("git", "status", "--short")),
-    }
 
 
 def run_spinup_study(config_path) -> tuple[Path, dict, float]:
@@ -624,30 +573,16 @@ def run_spinup_study(config_path) -> tuple[Path, dict, float]:
     repo_root = Path(__file__).resolve().parents[2]
     data = generate_spinup_study(config)
     derived = analyze_spinup_study(data, config["lorenz"])
-    source_paths = [
-        config_path,
-        Path(__file__).resolve(),
-        repo_root / "src/lorenz/core.py",
-        repo_root / "src/lorenz/ensemble.py",
-        repo_root / "experiments/run_unforced_spinup_pilot.py",
-    ]
-    config_identifier = f"sha256:{_file_sha256(config_path)}"
+    runner_path = repo_root / "experiments/run_unforced_spinup_pilot.py"
+    config_identifier = f"sha256:{file_sha256(config_path)}"
     timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     output_dir = repo_root / config["output_root"] / f"{timestamp}_{config_identifier[7:19]}"
     runtime = time.perf_counter() - start
     provenance = {
         "config_identifier": config_identifier,
-        "code_identifiers": {
-            str(path.relative_to(repo_root) if path.is_relative_to(repo_root) else path): f"sha256:{_file_sha256(path)}"
-            for path in source_paths
-        },
-        "git": _git_provenance(repo_root),
-        "environment": {
-            "python": sys.version,
-            "platform": platform.platform(),
-            "numpy": np.__version__,
-            "scipy": scipy.__version__,
-        },
+        "code_identifiers": active_source_identifiers(repo_root, runner_path),
+        "git": git_provenance(repo_root),
+        "environment": environment_provenance(),
         "runtime_seconds_before_persistence": runtime,
     }
     manifest = persist_spinup_study(
