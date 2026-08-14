@@ -1,9 +1,31 @@
-"""Lorenz equations, spinup, forced integration, and phase sampling."""
+"""Lorenz equations, forced integration, and phase-grid sampling."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.integrate import solve_ivp
+
+
+@dataclass(frozen=True)
+class PhaseSamples:
+    """State samples on a ``cycle x phase`` forcing grid.
+
+    ``values`` has shape ``(state, cycle, phase)`` and ``sample_times`` has
+    shape ``(cycle, phase)``. ``phase_offset`` is the forcing phase at phase
+    index zero, modulo ``2*pi``; it is the offset expected by response Fourier
+    extraction.
+    """
+
+    values: np.ndarray
+    sample_times: np.ndarray
+    phase_offset: float
+
+
+def _forcing_angle(t, omega: float, phase: float):
+    """Use one floating-point expression for the RHS and phase metadata."""
+    return omega * t + phase
 
 
 def lorenz_rhs(t, state, cfg, forcing=None, omega=0.0, phase=0.0):
@@ -13,7 +35,7 @@ def lorenz_rhs(t, state, cfg, forcing=None, omega=0.0, phase=0.0):
     beta = cfg["lorenz"]["beta"]
     fx = fy = fz = 0.0
     if forcing is not None:
-        f = np.sin(omega * t + phase)
+        f = np.sin(_forcing_angle(t, omega, phase))
         fx, fy, fz = np.asarray(forcing, dtype=float) * f
     return [
         sigma * (y - x) + fx,
@@ -31,43 +53,104 @@ def check_solution(sol, expected_shape):
         raise RuntimeError("non-finite values in solve_ivp output")
 
 
-def spinup_state(seed: int, cfg: dict):
-    rng = np.random.default_rng(seed)
-    y0 = rng.random(3)
-    sol = solve_ivp(
-        lambda t, s: lorenz_rhs(t, s, cfg),
-        [0, cfg["T_spinup"]],
-        y0,
-        t_eval=[cfg["T_spinup"]],
-        **cfg["solver"],
+def _positive_count(value, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, np.integer)
+    ):
+        raise ValueError(f"{name} must be a positive integer")
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def simulate_phase_samples(
+    initial_state,
+    forcing_vector,
+    omega: float,
+    phase: float,
+    discard_time: float,
+    n_cycle: int,
+    n_phase: int,
+    cfg: dict,
+) -> PhaseSamples:
+    """Integrate from forcing onset and retain a cycle-resolved phase grid.
+
+    The first sample is exactly at ``discard_time``. Later phase indices and
+    cycles advance by uniform fractions and whole multiples of the forcing
+    period, respectively. The caller owns construction of ``initial_state``;
+    in particular, ensemble generation is not inferred from a seed here.
+    """
+    initial_state = np.asarray(initial_state, dtype=float)
+    forcing_vector = np.asarray(forcing_vector, dtype=float)
+    if initial_state.shape != (3,) or not np.isfinite(initial_state).all():
+        raise ValueError("initial_state must be a finite vector with shape (3,)")
+    if forcing_vector.shape != (3,) or not np.isfinite(forcing_vector).all():
+        raise ValueError("forcing_vector must be a finite vector with shape (3,)")
+    if not np.isfinite(omega) or omega <= 0:
+        raise ValueError("omega must be finite and positive")
+    if not np.isfinite(phase):
+        raise ValueError("phase must be finite")
+    if not np.isfinite(discard_time) or discard_time < 0:
+        raise ValueError("discard_time must be finite and nonnegative")
+    n_cycle = _positive_count(n_cycle, "n_cycle")
+    n_phase = _positive_count(n_phase, "n_phase")
+
+    with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+        period = 2 * np.pi / float(omega)
+    cycle = np.arange(n_cycle, dtype=float)
+    phase_index = np.arange(n_phase, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        sample_times = float(discard_time) + (
+            cycle[:, None] + phase_index[None, :] / n_phase
+        ) * period
+    flat_times = sample_times.ravel()
+    if not np.isfinite(flat_times).all() or not np.all(np.diff(flat_times) > 0):
+        raise ValueError(
+            "sampling times must be finite and strictly increasing at float precision"
+        )
+
+    if flat_times[-1] == 0.0:
+        values = initial_state[:, None]
+    else:
+        sol = solve_ivp(
+            lambda t, state: lorenz_rhs(
+                t, state, cfg, forcing_vector, omega, phase
+            ),
+            [0.0, float(flat_times[-1])],
+            initial_state,
+            t_eval=flat_times,
+            **cfg["solver"],
+        )
+        check_solution(sol, (3, n_cycle * n_phase))
+        values = sol.y
+
+    phase_offset = np.mod(_forcing_angle(flat_times[0], omega, phase), 2 * np.pi)
+    return PhaseSamples(
+        values=values.reshape(3, n_cycle, n_phase),
+        sample_times=sample_times,
+        phase_offset=float(phase_offset),
     )
-    check_solution(sol, (3, 1))
-    return sol.y[:, -1]
 
 
-def simulate_phase_samples(seed: int, forcing_vector, omega: float, phase: float,
-                           n_skip: int, n_cycle: int, n_phase: int, cfg: dict,
-                           initial_state=None):
-    if initial_state is None:
-        initial_state = spinup_state(seed, cfg)
-    period = 2 * np.pi / omega
-    m = np.arange(n_cycle)
-    q = np.arange(n_phase)
-    times = (n_skip + m[:, None] + q[None, :] / n_phase) * period
-    sol = solve_ivp(
-        lambda t, s: lorenz_rhs(t, s, cfg, forcing_vector, omega, phase),
-        [0, float(times[-1, -1])],
+def phase_mean(
+    initial_state,
+    forcing_vector,
+    omega: float,
+    phase: float,
+    discard_time: float,
+    n_cycle: int,
+    n_phase: int,
+    cfg: dict,
+) -> np.ndarray:
+    """Return a cycle average for exploratory use only."""
+    result = simulate_phase_samples(
         initial_state,
-        t_eval=times.ravel(),
-        **cfg["solver"],
+        forcing_vector,
+        omega,
+        phase,
+        discard_time,
+        n_cycle,
+        n_phase,
+        cfg,
     )
-    check_solution(sol, (3, n_cycle * n_phase))
-    return sol.y.reshape(3, n_cycle, n_phase)
-
-
-def phase_mean(seed: int, forcing_vector, omega: float, phase: float,
-               n_skip: int, n_cycle: int, n_phase: int, cfg: dict,
-               initial_state=None):
-    samples = simulate_phase_samples(seed, forcing_vector, omega, phase, n_skip,
-                                     n_cycle, n_phase, cfg, initial_state=initial_state)
-    return samples.mean(axis=1)
+    return result.values.mean(axis=1)

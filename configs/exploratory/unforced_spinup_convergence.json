@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "study_id": "unforced_spinup_convergence_v1",
+  "classification": "exploratory",
+  "output_root": "outputs/exploratory/unforced_spinup_convergence",
+  "root_entropy": 20260814,
+  "block_count": 64,
+  "workers": 4,
+  "burnin_times": [10.0, 20.0, 40.0, 80.0],
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-09,
+    "atol": 1e-11
+  },
+  "proposals": [
+    {
+      "name": "primary_box",
+      "block_id_start": 0,
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [0.0, 50.0]
+    },
+    {
+      "name": "near_origin_box",
+      "block_id_start": 100000,
+      "x_half_width": 2.0,
+      "y_half_width": 2.0,
+      "z_bounds": [0.0, 4.0]
+    }
+  ]
+}

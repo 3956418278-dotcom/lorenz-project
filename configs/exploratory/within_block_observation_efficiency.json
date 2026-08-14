@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "study_id": "within_block_observation_efficiency_from_b256_v1",
+  "classification": "exploratory_reanalysis",
+  "output_root": "outputs/exploratory/within_block_observation_efficiency",
+  "runner_path": "experiments/run_observation_efficiency_analysis.py",
+  "parent_artifact": "outputs/exploratory/strength_identifiability_refinement/20260814T080709_12e8192abb9f",
+  "cycle_lengths": [1, 2, 4, 8, 16, 32, 64],
+  "bootstrap_cycle_lengths": [8, 16, 32, 64],
+  "projection_cycle_options": [256, 1024, 4096, 10589, 12346, 16384],
+  "projection_candidates": [
+    {"target": "odd_fundamental", "prefix_upper_strength": 1.0},
+    {"target": "odd_fundamental", "prefix_upper_strength": 2.0},
+    {"target": "odd_fundamental", "prefix_upper_strength": 3.0},
+    {"target": "odd_fundamental", "prefix_upper_strength": 4.0}
+  ],
+  "discard_time": 160.0,
+  "n_phase": 32,
+  "protocol": {
+    "status": "provisional_method_validation_only",
+    "omega": 2.0,
+    "direction": [1.0, 0.0, 0.0]
+  },
+  "bootstrap": {
+    "confidence": 0.95,
+    "resamples": 9999,
+    "root_entropy": 2026081406,
+    "batch_size": 128,
+    "higher_order_fraction_limit": 0.2,
+    "structural_null_outputs": {
+      "odd_fundamental": [false, false, true],
+      "even_second_harmonic": [true, true, false],
+      "even_dc": [true, true, false]
+    }
+  }
+}

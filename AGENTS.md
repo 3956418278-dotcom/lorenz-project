@@ -123,28 +123,47 @@ Local complexity is acceptable when the problem requires it. Keep that complexit
 
 ---
 
-## Use delegation when separate context helps
+## Keep detailed local work out of the main context
 
-Sub-agents are optional execution tools.
+Treat the main context as project working memory.
 
-Handle the work directly when one coherent context is enough.
+Keep in it the information that affects future decisions:
+- project goals and confirmed definitions;
+- current capabilities and blockers;
+- cross-cutting constraints;
+- accepted conclusions and their limitations;
+- decisions that require the user's judgment.
 
-When the runtime supports delegation, use a sub-agent when a separate context would materially improve reasoning or execution, such as:
+When the runtime supports delegation, prefer a separate agent context for work
+whose execution requires much more detail than the main project will need afterward.
 
-- comparing independent approaches;
-- investigating a large code or reference area;
-- diagnosing a deep local issue;
-- checking an important conclusion independently;
-- exploring work that can proceed in parallel;
-- keeping a high-detail investigation out of the main context.
+Typical examples include:
+- deep code or repository investigation;
+- long mathematical derivations;
+- reference or literature analysis;
+- experimental runs and parameter comparisons;
+- log-heavy debugging;
+- independent verification of a local conclusion.
 
-The current agent decides whether delegation is useful, how many sub-agents are appropriate, and what each one should investigate.
+The important question is not whether the task is large:
 
-Give each delegated task the question, why it matters, the confirmed context it needs, relevant constraints, and the result needed for synthesis.
+> Will solving this require substantially more local detail than the main context
+> should retain after the answer is known?
 
-Bring back conclusions, evidence, assumptions, uncertainties, and project implications. Synthesize them in the parent context and continue the main work.
+If yes, delegate it when practical.
 
-The user should not need to design the agent team or relay messages between agents.
+A delegated task should receive the confirmed context it needs and return:
+- the conclusion;
+- supporting evidence;
+- assumptions and limitations;
+- project impact;
+- unresolved questions that matter to the parent task.
+
+Keep detailed exploration, logs, intermediate calculations, and local implementation
+history in the delegated context or project artifacts. Retrieve them again only when needed.
+
+The parent agent owns decomposition, synthesis, project-level decisions, and coordination.
+The user should not need to create the agent structure or relay messages between agents.
 
 ---
 

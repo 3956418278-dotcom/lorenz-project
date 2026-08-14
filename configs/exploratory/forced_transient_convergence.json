@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "study_id": "forced_transient_provisional_protocol_v1",
+  "classification": "exploratory",
+  "output_root": "outputs/exploratory/forced_transient_convergence",
+  "block_count": 48,
+  "workers": 4,
+  "discard_times": [0.0, 5.0, 10.0, 20.0, 40.0],
+  "n_cycle": 24,
+  "n_phase": 24,
+  "harmonics": [0, 1, 2, 3, 4, 5],
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-09,
+    "atol": 1e-11
+  },
+  "initial_ensemble": {
+    "root_entropy": 2026081403,
+    "block_id_start": 2200000,
+    "spinup_time": 40.0,
+    "proposal": {
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [0.0, 50.0]
+    }
+  },
+  "protocol": {
+    "status": "provisional_method_validation_only",
+    "omega": 2.0,
+    "strength": 0.5,
+    "direction": [1.0, 0.0, 0.0],
+    "phase": 0.0
+  }
+}

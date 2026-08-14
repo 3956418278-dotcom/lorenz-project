@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "study_id": "strength_identifiability_replicated_refinement_v1",
+  "classification": "exploratory",
+  "output_root": "outputs/exploratory/strength_identifiability_refinement",
+  "runner_path": "experiments/run_strength_identifiability_refinement.py",
+  "block_count": 256,
+  "workers": 8,
+  "strengths": [0.25, 0.5, 1.0, 2.0, 3.0, 4.0],
+  "discard_time": 160.0,
+  "n_cycle": 64,
+  "n_phase": 32,
+  "harmonics": [0, 1, 2, 3, 4, 5],
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-09,
+    "atol": 1e-11
+  },
+  "initial_ensemble": {
+    "root_entropy": 2026081405,
+    "block_id_start": 2400000,
+    "spinup_time": 40.0,
+    "proposal": {
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [0.0, 50.0]
+    }
+  },
+  "protocol": {
+    "status": "provisional_method_validation_only",
+    "omega": 2.0,
+    "direction": [1.0, 0.0, 0.0],
+    "phase": 0.0
+  },
+  "bootstrap": {
+    "confidence": 0.95,
+    "resamples": 9999,
+    "root_entropy": 2026081406,
+    "batch_size": 128,
+    "higher_order_fraction_limit": 0.2,
+    "structural_null_outputs": {
+      "odd_fundamental": [false, false, true],
+      "even_second_harmonic": [true, true, false],
+      "even_dc": [true, true, false]
+    }
+  }
+}
