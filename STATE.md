@@ -86,6 +86,9 @@
   component, real/imaginary coordinate, and observation prefix jointly. It
   reports signal identification separately from higher-order adequacy and
   fails closed when a leading denominator is unresolved.
+- A read-only exploratory figure layer converts pinned existing artifacts into
+  PNG/PDF figures with per-figure source data, artifact hashes, quantity
+  conventions, and uncertainty semantics. It does not run integrations.
 - Direction-design and reconnaissance capabilities reconstruct block-level
   tensors across crossed forcing directions and frequencies, diagnose Lorenz
   parity sectors, and preserve the unforced second harmonic separately from
@@ -93,7 +96,7 @@
   not been executed.
 - Analytic synthetic-signal verification of Fourier signs, factors, complex
   susceptibility recovery, and direction reconstruction. Current active test
-  result: `99 passed`.
+  result: `105 passed`.
 
 ## Not Yet Confirmed
 
@@ -236,6 +239,11 @@ negligible higher order.
   establish identification. DC still needs a common uncertain `mu0` baseline;
   separate per-frequency baselines are not justified.
   Artifact: `outputs/exploratory/variance_reduction_heldout/20260814T141349_2694329f4136/`.
+- Existing strength, identifiability, higher-order, numerical-convergence, and
+  frequency evidence has read-only PNG/PDF views with source sidecars.
+  Artifact: `outputs/figures/exploratory_existing/d3adcc7397b4/`. Existing
+  experiment artifacts do not retain raw time/phase series, so an honest raw
+  chaotic-signal versus forced-response figure cannot yet be generated.
 
 ## Working Constraints
 

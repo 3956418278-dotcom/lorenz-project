@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "figure_set_id": "exploratory_existing_v1",
+  "output_root": "outputs/figures/exploratory_existing",
+  "runner_path": "experiments/generate_exploratory_figures.py",
+  "artifacts": {
+    "strength": {
+      "path": "outputs/exploratory/strength_identifiability_refinement/20260814T080709_12e8192abb9f",
+      "manifest_sha256": "f2831cf9c23fe6fe3f05e247619a311c56315b5b8a01b71f2bc8a6ad225e22e9",
+      "classification": "exploratory",
+      "study_id": "strength_identifiability_replicated_refinement_v1"
+    },
+    "frequency": {
+      "path": "outputs/exploratory/frequency_reconnaissance/20260814T132507_9e8a11beb461",
+      "manifest_sha256": "e969348d16d7788320a1b4b58906ab4270a47b018d98f53c1bbe879f17ad25f7",
+      "classification": "exploratory_frequency_reconnaissance",
+      "study_id": "minimal_frequency_reconnaissance_x_v1"
+    },
+    "numerical": {
+      "path": "outputs/exploratory/numerical_convergence_provisional/20260814T062105_afb486be58b6",
+      "manifest_sha256": "15d73bfb8a83a49d0e2f6e0deedf5a6b256e6208301e6b467119cae0e674eade",
+      "classification": "exploratory",
+      "study_id": "numerical_convergence_provisional_protocol_v1"
+    },
+    "heldout": {
+      "path": "outputs/exploratory/variance_reduction_heldout/20260814T141349_2694329f4136",
+      "manifest_sha256": "d4f9cac8ae4fe92ef404dcced2d39de0ee13ec3ec4fd5bbf25f06cf117905965",
+      "classification": "exploratory_heldout_variance_reduction",
+      "study_id": "second_harmonic_variance_reduction_heldout_v1"
+    }
+  },
+  "selection": {
+    "omega": 2.0,
+    "frequency_strength": 2.0,
+    "fundamental_observable": "x",
+    "second_harmonic_observable": "z"
+  }
+}
