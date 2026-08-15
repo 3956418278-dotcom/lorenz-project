@@ -158,41 +158,47 @@ and one of eight symmetry-allowed entries in each effective quadratic tensor.
 An x-only observation extension therefore cannot determine the full-tensor
 sampling budget.
 
-The executed x-direction dense response pilot (12 frequencies `0.5`-`22.6`,
-half-octave grid, strengths `{0.25, 0.5, 1, 2}` at B=64 with observation
-`max(64 cycles, 400 time)`; anchors `{0.5, 1, 4, 8}` extended to six strengths)
-gives the first result-level picture of the x-direction response:
+The executed x-direction dense response pilot: 12 response-independent
+half-octave frequencies `0.5`-`22.6`, x-forcing, strengths
+`{0.25, 0.5, 1, 2}` at B=64 (observation `max(64 cycles, 400 time)`; anchors
+`{0.5, 1, 4, 8}` extended to six strengths), with block-level Fourier and
+dense spectral retention. Artifacts:
+`outputs/exploratory/x_response_dense_v1/`, `x_response_c2_extras_v1/`,
+`x_response_merged_v1/` (corrected merged diagnostics; the first merged run
+was superseded after a coefficient-summary filtering bug was found and fixed).
 
-- chi1_xx(omega) is a resolved landscape: a plateau near `0.16-0.20` at
-  `omega <= 2`, a dip near the intrinsic band (`omega = 2.8-4`), a secondary
-  peak at `5.6`, and a clean falloff above `omega0 ~ 10.2` (down to
-  `0.041 +/- 0.003` at `22.6`).
-- Second order remains undetected everywhere. The simultaneous-95% result is
-  now a quantitative bound: `|chi2z|` below roughly `0.1` across the grid
-  (largest points `omega=1.4: 0.097 +/- 0.053`, `omega=2: 0.076 +/- 0.065`);
-  `Qdc z` below roughly `0.03` (largest `omega=11.3: 0.026 +/- 0.009`).
-- The fitted higher-order coefficients c3/c4 and the direct harmonics
-  n=3,4,5 are NOT detected at any frequency or strength, while the provisional
-  20% negligibility bounds fail at the odd anchors. Detection is reported
-  separately from negligibility: "bound fails" does not imply significance.
-  The validity map therefore contains no "bounded small" cells: the
-  identification window (first order, `h >= 1-2`) and the adequacy window do
-  not overlap under the current provisional rule.
-- c1 precision: 6-strength anchors measure SE `0.0065-0.0123` (projection
-  met); the 4-strength dense cells carry `~0.023` (the plan's `0.0105` figure
-  assumed the 6-strength fit). c2 SEs at the anchors measure
-  `0.0017-0.0072` (projections met).
+Established (stored whole-block simultaneous 95% bounds, not point +/- SE):
 
-The next decision is the direction extension: the deferred six-direction
-design (now informed by the measured x-direction noise scales and the
-per-frequency family machinery) versus accepting the x-only scope for the
-near term. The second-order weakness is now quantified rather than merely
-unresolved, so the direction design can be budgeted against a stated
-bound-level target for the quadratic tensor. DC continues to require unforced
-mean subtraction; its common high-precision `mu0` baseline should be designed
-only after the frequency/direction family is known. The simultaneous 95% and
-20% criteria remain provisional design criteria, not the final scientific
-meaning of negligible higher order.
+- chi1_xx(omega) is detected at {0.5, 1.0, 1.4, 2.0, 4.0, 5.6, 8.0, 16.0,
+  22.6} and not detected at {0.7, 2.8, 11.3}. Paired same-block comparisons
+  resolve an elevated band at `5.6-8` over `2.8-4` and the falloff above `8`;
+  the low-omega plateau versus `2.8-4`, `5.6` versus `8`, and the high tail
+  flatness are not resolved, so no dip/peak labels are claimed.
+- The fitted c1 is stable across the 4-6 strength fits within ~1-1.5 SE (the
+  3-strength fit is not a valid c1 estimate); it is described as the leading
+  coefficient of the truncated strength-series fit.
+- Second order and DC are not detected anywhere. Stored upper bounds:
+  `chi2z <= 0.004-0.33` across the grid (tightest `0.034` at `omega=0.5`,
+  `0.035` at `8`); `Qdc z <= 0.008-0.066`. The fitted c2 decays toward zero as
+  the fit range grows: c2 is consistent with zero, so only the bounds are
+  scientific content.
+- The fitted c3/c4 and the direct harmonics n=3,4,5 are not detected at any
+  frequency or strength. Negligibility (provisional 20% rule) is established
+  nowhere: no `(omega, h)` cell is "bounded small". An exploratory sub-family
+  bootstrap shows the global family (critical 4.16 versus 3.68-3.87 for
+  natural sub-families) is not the cause of second-order non-detection;
+  `|c2|/SE <= 2.0` everywhere.
+
+Unresolved: the validity region (identified AND higher-order-negligible) does
+not exist under the provisional rule; second order is bounded but not
+measured; the DC common high-precision `mu0` baseline remains deferred; the
+Welch background is validated only as a descriptive scale.
+
+Next decision: with x-forcing alone resolving only two of five linear and one
+of eight quadratic entries, choose between the deferred six-direction
+extension (now budgetable against a stated bound-level quadratic target) or
+increasing B/observation for the x-only second order. Awaiting approval
+before any further experiment.
 
 ## Delegated Design Conclusions
 
@@ -273,20 +279,14 @@ meaning of negligible higher order.
   illustrative panel (phase-resolved reconstruction) is labeled as such.
   Artifact: `outputs/figures/supervisor_evidence_20260815/` (`make_figures.py`,
   `fig{1..4}*.png/pdf`, `notes.md`).
-- The x-direction dense response pilot (executed): dense grid artifact
+- x-direction dense response pilot artifacts: dense grid
   `outputs/exploratory/x_response_dense_v1/20260815T120543_3e1cb15bc6f3/`,
-  c2-extras artifact
-  `outputs/exploratory/x_response_c2_extras_v1/20260815T122332_1a3ae1d04b23/`,
-  merged analysis artifact
-  `outputs/exploratory/x_response_merged_v1/20260815T122412_merged/`.
-  Verification against the pre-declared budgets and the stored reconnaissance
-  passed (see `outputs/figures/x_response_results/verify_results.py`).
-- Result figure set for the pilot: `outputs/figures/x_response_results/`
-  (`make_figures.py`, `fig{1..4}*.png/pdf`, `notes.md`): response spectrum with
-  same-estimator sampling uncertainty and a separately labeled descriptive
-  Welch background; fitted c1/c2 frequency curves converted per PROJECT.md
-  with a finite-strength convergence panel; strength scaling with leading-power
-  guides and direct higher harmonics; the four-state validity map.
+  c2-extras `outputs/exploratory/x_response_c2_extras_v1/20260815T122332_1a3ae1d04b23/`,
+  corrected merged analysis
+  `outputs/exploratory/x_response_merged_v1/20260815T133813_merged/`.
+  Result figures and the canonical result summary:
+  `outputs/figures/x_response_results/` (`make_figures.py`, `result_extract.py`,
+  `result_checks.py`, `verify_results.py`, `fig{1..4}*.png/pdf`, `notes.md`).
 
 ## Working Constraints
 

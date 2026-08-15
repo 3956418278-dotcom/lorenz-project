@@ -876,13 +876,13 @@ def analyze_x_response(cells: dict, config: dict) -> dict:
         for target in TARGET_ORDERS:
             coefficient_summaries[omega][target] = {}
             for coefficient in ("leading", "higher"):
-                records = entries(
+                matches = entries(
                     "coefficient",
                     omega=omega,
                     target=target,
                     coefficient=coefficient,
                 )
-                coefficient_summaries[omega][target][coefficient] = records
+                coefficient_summaries[omega][target][coefficient] = matches
 
     return {
         "interpretation": (
