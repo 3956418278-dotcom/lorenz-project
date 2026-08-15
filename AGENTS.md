@@ -68,6 +68,27 @@ Avoid replacing a difficult part of the actual problem with a toy substitute sim
 Prefer one coherent path that works for the real project over several partial or overlapping paths.
 
 ---
+### Make analysis useful for human decisions
+
+For analysis, diagnostics, visualization, and presentation work, organize the
+output around the scientific or project decision a person needs to make.
+
+Prefer the most direct evidence that makes the relevant phenomenon understandable.
+Use the minimum engineering structure needed for correctness and useful reuse.
+A one-off analysis or figure should normally remain a thin analysis or view rather
+than become a new project capability.
+
+Choose data and comparisons from the scientific question rather than from whichever
+existing artifact is easiest to reuse. Comparisons intended to support a conclusion
+should use compatible conditions unless the difference itself is part of the claim.
+
+When existing artifacts are insufficient for an important interpretation, distinguish
+between expensive evidence generation and cheap illustrative computation. A small
+representative calculation may be added when it materially improves understanding,
+provided it is clearly separated from inferential evidence and labeled accordingly.
+
+When the available evidence cannot answer a question, present that limitation directly
+rather than replacing it with a more elaborate diagnostic.
 
 ## Read context with a purpose
 
