@@ -554,6 +554,86 @@ def dense_trajectory_summary(
     )
 
 
+@dataclass(frozen=True)
+class DenseBlockSpectrum:
+    """Complex block-level physical-frequency spectrum of one trajectory.
+
+    ``coefficients`` has axes ``state, frequency_bin``: the segment-averaged
+    complex DFT of the raw dense trajectory,
+
+        S_b(Omega_k) = mean_segments [ sum_t x(t) w(t) exp(-i Omega_k t) ]
+                       / sum_t w(t),
+
+    with a Hann window ``w`` of length ``welch_segment``.  ``S_b`` is stored,
+    not ``abs(S_b)`` or ``abs(S_b)**2``, so later analysis can compute both
+    ``abs(S_b(Omega))`` per block and ``abs(mean_b S_b(Omega))`` after
+    complex averaging across blocks.  ``frequency_grid`` is the explicit
+    angular-frequency grid and is identical for every trajectory of one
+    frequency cell.
+    """
+
+    coefficients: np.ndarray
+    frequency_grid: np.ndarray
+    segment_count: int
+    dense_dt: float
+    frequency_step: float
+    nyquist: float
+    maximum_frequency: float
+
+
+def dense_block_spectrum(
+    dense_values,
+    dense_times,
+    welch_segment: int,
+    max_psd_bins: int,
+) -> DenseBlockSpectrum:
+    """Compute the complex per-block spectrum of the raw dense trajectory.
+
+    The spectrum is taken of the raw trajectory, not of a residual, so the
+    forcing response peak at ``omega`` and its harmonics is present.  Segments
+    are averaged coherently (complex addition) within the block; no averaging
+    across blocks happens here.
+    """
+    dense_values = np.asarray(dense_values, dtype=float)
+    dense_times = np.asarray(dense_times, dtype=float)
+    if dense_values.ndim != 2 or dense_values.shape[0] != 3:
+        raise ValueError("dense values must have axes state,time")
+    if dense_times.shape != (dense_values.shape[1],):
+        raise ValueError("dense times must match the time axis")
+    if len(dense_times) < 2 or np.any(np.diff(dense_times) <= 0):
+        raise ValueError("dense times must be strictly increasing")
+    welch_segment = int(welch_segment)
+    max_psd_bins = int(max_psd_bins)
+    if welch_segment < 16 or max_psd_bins < 8:
+        raise ValueError("dense spectrum settings are too small")
+    dt = float(np.median(np.diff(dense_times)))
+    window = np.hanning(welch_segment)
+    total_bins = min(max_psd_bins, welch_segment // 2)
+    accumulated = np.zeros((3, total_bins), dtype=complex)
+    segment_count = 0
+    offset = 0
+    while offset + welch_segment <= dense_values.shape[1]:
+        segment = dense_values[:, offset : offset + welch_segment]
+        accumulated += np.fft.rfft(segment * window[None, :], axis=1)[
+            :, :total_bins
+        ]
+        segment_count += 1
+        offset += welch_segment
+    if segment_count == 0:
+        raise ValueError("dense window is shorter than one spectrum segment")
+    coefficients = accumulated / (segment_count * float(np.sum(window)))
+    frequency_step = 2 * np.pi / (welch_segment * dt)
+    return DenseBlockSpectrum(
+        coefficients=coefficients,
+        frequency_grid=frequency_step * np.arange(total_bins, dtype=float),
+        segment_count=segment_count,
+        dense_dt=dt,
+        frequency_step=float(frequency_step),
+        nyquist=float(np.pi / dt),
+        maximum_frequency=float((total_bins - 1) * frequency_step),
+    )
+
+
 def _integrate_phase_and_dense(arguments):
     initial_state, forcing, sampling, dense_config, numerical_config = arguments
     phase_samples, dense_values, dense_times = simulate_phase_and_dense(
@@ -580,7 +660,17 @@ def _integrate_phase_and_dense(arguments):
         dense_config["max_psd_bins"],
         dense_config.get("raw_segment_samples", 0),
     )
-    return fourier, summary
+    spectrum = dense_block_spectrum(
+        dense_values,
+        dense_times,
+        dense_config["welch_segment"],
+        dense_config["max_psd_bins"],
+    )
+    if dense_config.get("retain_dense"):
+        dense_retained = (dense_values, dense_times)
+    else:
+        dense_retained = None
+    return fourier, summary, spectrum, phase_samples, dense_retained
 
 
 def integrate_phase_and_dense_conditions(
@@ -593,20 +683,31 @@ def integrate_phase_and_dense_conditions(
     *,
     workers: int = 1,
     raw_segment_blocks: int = 0,
+    retain_phase_samples: bool = False,
+    retain_dense_blocks: int = 0,
 ):
-    """Integrate once per block-by-condition cell into Fourier plus dense summaries.
+    """Integrate once per block-by-condition cell into Fourier, dense, and
+    spectral summaries.
 
     The Fourier result axes are ``block, condition, state, cycle, harmonic``
     exactly as :func:`integrate_cycle_fourier_conditions`.  Dense summaries
     are returned as a matching ``block, condition`` array of
-    :class:`DenseTrajectorySummary`; raw dense segments are retained only for
-    the first ``raw_segment_blocks`` blocks.
+    :class:`DenseTrajectorySummary`; complex block spectra as a matching
+    array of :class:`DenseBlockSpectrum`.  Raw dense segments are retained
+    only for the first ``raw_segment_blocks`` blocks.  When
+    ``retain_phase_samples`` is true, the phase-grid samples with axes
+    ``block, condition, state, cycle, phase`` are returned as well.  When
+    ``retain_dense_blocks`` is positive, the full dense trajectories of the
+    first that many blocks are returned with axes
+    ``block, condition, state, time``.  Callers are responsible for the
+    retention policy (these objects are large).
     """
     block_ids = tuple(block_ids)
     initial_states = np.asarray(initial_states, dtype=float)
     forcing_vectors = np.asarray(forcing_vectors, dtype=float)
     workers = _positive_integer(workers, "workers")
     raw_segment_blocks = int(raw_segment_blocks)
+    retain_dense_blocks = int(retain_dense_blocks)
     if len(block_ids) < 1 or len(set(block_ids)) != len(block_ids):
         raise ValueError("block_ids must be nonempty and unique")
     if initial_states.shape != (len(block_ids), 3) or not np.isfinite(initial_states).all():
@@ -622,6 +723,8 @@ def integrate_phase_and_dense_conditions(
         raise TypeError("sampling must be a CycleFourierSampling")
     if raw_segment_blocks < 0 or raw_segment_blocks > len(block_ids):
         raise ValueError("raw_segment_blocks must lie within the block axis")
+    if retain_dense_blocks < 0 or retain_dense_blocks > len(block_ids):
+        raise ValueError("retain_dense_blocks must lie within the block axis")
     required = {"dt", "n_theta_bins", "welch_segment", "max_psd_bins"}
     if not required.issubset(dense_config):
         raise ValueError("dense config requires dt, n_theta_bins, welch_segment, max_psd_bins")
@@ -637,6 +740,7 @@ def integrate_phase_and_dense_conditions(
                     if block_index < raw_segment_blocks
                     else 0
                 ),
+                "retain_dense": block_index < retain_dense_blocks,
             },
             numerical_config,
         )
@@ -656,10 +760,45 @@ def integrate_phase_and_dense_conditions(
         len(sampling.harmonics),
     )
     summary_flat = [item[1] for item in integrated]
+    spectrum_flat = [item[2] for item in integrated]
     summaries = np.empty((len(block_ids), len(forcing_vectors)), dtype=object)
+    spectra = np.empty((len(block_ids), len(forcing_vectors)), dtype=object)
     for block_index in range(len(block_ids)):
         for condition in range(len(forcing_vectors)):
-            summaries[block_index, condition] = summary_flat[
-                block_index * len(forcing_vectors) + condition
+            flat_index = block_index * len(forcing_vectors) + condition
+            summaries[block_index, condition] = summary_flat[flat_index]
+            spectra[block_index, condition] = spectrum_flat[flat_index]
+    if retain_phase_samples:
+        phase_values = np.asarray(
+            [item[3].values for item in integrated]
+        ).reshape(
+            len(block_ids),
+            len(forcing_vectors),
+            3,
+            sampling.n_cycle,
+            sampling.n_phase,
+        )
+        phase_sample_times = integrated[0][3].sample_times
+    else:
+        phase_values = None
+        phase_sample_times = None
+    if retain_dense_blocks > 0:
+        dense_values = np.asarray(
+            [
+                item[4][0]
+                for item in integrated
+                if item[4] is not None
             ]
-    return fourier, summaries
+        ).reshape(
+            retain_dense_blocks,
+            len(forcing_vectors),
+            3,
+            -1,
+        )
+        dense_times = next(item[4][1] for item in integrated if item[4] is not None)
+    else:
+        dense_values = None
+        dense_times = None
+    return fourier, summaries, spectra, phase_values, phase_sample_times, (
+        (dense_values, dense_times) if dense_values is not None else None
+    )

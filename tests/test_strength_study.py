@@ -91,6 +91,38 @@ def test_explicit_components_keep_a2_u2_and_dc_semantics_separate():
     np.testing.assert_allclose(dc["current_E0"], 4)
 
 
+def test_dense_block_spectrum_recovers_a_sinusoid_amplitude():
+    from lorenz.strength_study import dense_block_spectrum
+
+    dt = 0.1
+    count = 1024
+    times = dt * np.arange(count, dtype=float)
+    frequency_step = 2 * np.pi / (512 * dt)
+    omega0 = 5 * frequency_step  # exactly on a frequency bin
+    values = np.stack(
+        [
+            3.0 * np.cos(omega0 * times),
+            2.0 * np.cos(2 * omega0 * times),
+            0.5 * np.ones(count),
+        ]
+    )
+    spectrum = dense_block_spectrum(values, times, 512, 256)
+    assert spectrum.coefficients.shape == (3, 256)
+    assert spectrum.segment_count == 2
+    # The Hann window leaks the 2*Omega0 image by O(1e-5), hence the
+    # tolerance: |S_b(Omega0)| = A/2 exactly only for a rectangular window.
+    np.testing.assert_allclose(
+        np.abs(spectrum.coefficients[0, 5]), 3.0 / 2, rtol=1e-4
+    )
+    np.testing.assert_allclose(
+        np.abs(spectrum.coefficients[1, 10]), 2.0 / 2, rtol=1e-4
+    )
+    np.testing.assert_allclose(spectrum.coefficients[2, 0], 0.5, rtol=1e-6)
+    np.testing.assert_allclose(
+        spectrum.frequency_grid, frequency_step * np.arange(256)
+    )
+
+
 def test_frequency_container_preserves_crossed_blocks_and_stable_keys():
     first = _study()
     second = StrengthStudyData(**{**first.__dict__, "omega": 4.0})

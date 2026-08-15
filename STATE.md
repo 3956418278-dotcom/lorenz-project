@@ -90,6 +90,29 @@
   per-frequency detection/adequacy family (identification per strength,
   fitted c1/c2/c3/c4 coefficients, direct harmonics n=3,4,5, nested-prefix
   adequacy, four-state interpretation).
+- A retained-data contract (`RETENTION.md`, `src/lorenz/retention.py`) for the
+  production run: structured condition identity (condition table, sampling
+  grids, solver/spinup settings) plus chunk-by-chunk block-level files holding
+  per-cycle complex Fourier coefficients `(block, condition, cycle, state,
+  harmonic)`, estimator phase-grid samples `(block, condition, cycle, phase,
+  state)`, complex per-block physical-frequency spectra `S_b(Omega)` with the
+  explicit frequency grid `(block, condition, state, frequency_bin)`, and
+  optionally complete dense trajectories `(block, condition, state, time)`.
+  Retention is explicit in configuration (`retention.*_blocks`:
+  `"all"`/count/null; per-cycle Fourier and phase samples default to "all";
+  dense trajectories must be set explicitly). Derived summaries remain
+  reproducible from the raw contract. The storage-scaling calculator
+  (`src/lorenz/storage_scale.py`) reports each object class as a function of
+  B, directions, strengths, observation rule, dt, phase resolution, harmonic
+  count, and spectrum bin count (reference: the executed x-pilot design at
+  full retention is 4.33 GiB uncompressed, of which phase samples 2.01 GiB,
+  dense trajectories 1.39 GiB, per-cycle Fourier 773 MiB, spectra 81 MiB).
+- Direct block-level visualizations (`src/lorenz/response_plots.py`):
+  per-block spectra with coherent ensemble mean and its uncertainty, raw
+  time-domain trajectories, measured frequency-response curves, normalized
+  strength dependence, and the complete retained harmonic set with per-cycle
+  distributions. Lines/markers are estimates, bands are uncertainty, clouds
+  are empirical block distributions, and reference lines are labeled.
 - Whole-block bootstrap inference resamples every crossed strength, condition,
   component, real/imaginary coordinate, and observation prefix jointly. It
   reports signal identification separately from higher-order adequacy and
@@ -200,6 +223,16 @@ extension (now budgetable against a stated bound-level quadratic target) or
 increasing B/observation for the x-only second order. Awaiting approval
 before any further experiment.
 
+Before the next production experiment is designed, the retention level
+(dense trajectories, phase samples, per-cycle Fourier, spectra) is chosen
+from the storage-scaling report (`python -m lorenz.storage_scale`); no
+retention level is hard-coded. The complete noise-versus-response figure
+(per-block |S_b| cloud + coherent |mean_b S_b| + its uncertainty) requires
+the production retained spectrum object; the executed artifacts retain only
+per-block real Welch PSDs of the residual, so the current reconstruction is
+limited to the per-block fluctuation spectra (see
+`outputs/figures/x_response_block_level/notes.md`).
+
 ## Delegated Design Conclusions
 
 - Recommended estimand: the phase-conditioned expectation of the selected
@@ -287,6 +320,13 @@ before any further experiment.
   Result figures and the canonical result summary:
   `outputs/figures/x_response_results/` (`make_figures.py`, `result_extract.py`,
   `result_checks.py`, `verify_results.py`, `fig{1..4}*.png/pdf`, `notes.md`).
+- Block-level figure set built from the same executed artifacts with the new
+  production plotting functions: `outputs/figures/x_response_block_level/`
+  (`make_figures.py`, `fig1_block_spectra_limited`, `fig1_supplement_complex_2blocks`,
+  `fig2_raw_time_domain`, `fig3_frequency_response`, `fig4_strength_dependence`,
+  `fig5_harmonic_content`, `notes.md`). fig1 is reconstruction-limited (the
+  executed artifacts lack the complex per-block spectrum S_b(Omega)); the
+  complete figure requires the next production run's retained spectrum.
 
 ## Working Constraints
 
@@ -300,6 +340,14 @@ before any further experiment.
 - The usable environment is currently
   `/home/feng/miniforge3/envs/ml/bin/python`; the default `python` lacks NumPy
   and SciPy, and dependency versions are not locked.
+- This retention/visualization work ran on the Windows machine's Python
+  3.14.3 (`E:\Downloads\py\python.exe`, numpy 2.4.3, scipy 1.17.1, matplotlib
+  3.10.8, pytest installed locally; run tests with `PYTHONPATH=src python -m
+  pytest tests/`). One pre-existing Windows-only test failure remains:
+  `test_artifacts.py::test_json_ready_and_atomic_write_preserve_project_json_bytes`
+  expects POSIX `Path` stringification ("relative/path"); on Windows
+  `str(Path(...))` yields backslashes. The remaining suite passes (117
+  tests).
 
 ## Context Policy
 

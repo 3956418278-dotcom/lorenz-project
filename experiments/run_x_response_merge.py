@@ -52,8 +52,14 @@ def main() -> None:
         manifest_path = artifact / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         verify_file_identifiers(artifact, manifest["files"])
-    dense = load_x_response_cells(arguments.dense_artifact / "raw_x_response_summaries.npz")
-    extras = load_x_response_cells(arguments.extras_artifact / "raw_x_response_summaries.npz")
+    dense = load_x_response_cells(
+        arguments.dense_artifact / "raw_x_response_summaries.npz",
+        load_block_level=False,
+    )
+    extras = load_x_response_cells(
+        arguments.extras_artifact / "raw_x_response_summaries.npz",
+        load_block_level=False,
+    )
     for omega in sorted(extras):
         if omega not in dense:
             raise ValueError(f"extras frequency {omega} is absent from the dense artifact")

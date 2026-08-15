@@ -132,6 +132,50 @@ def simulate_phase_samples(
     )
 
 
+def sampling_grids(
+    omega: float,
+    discard_time: float,
+    n_cycle: int,
+    n_phase: int,
+    dense_dt=None,
+):
+    """Return the exact sampling grids of one frequency cell.
+
+    The phase-grid times and dense times use the same arithmetic as
+    :func:`simulate_phase_samples` and :func:`simulate_phase_and_dense`, so
+    the returned grids are bit-identical to the ones integrated trajectories
+    are actually evaluated on.  The grids are shared by every block and
+    condition of a cell and are therefore stored once per cell.
+    """
+    if not np.isfinite(omega) or omega <= 0:
+        raise ValueError("omega must be finite and positive")
+    if not np.isfinite(discard_time) or discard_time < 0:
+        raise ValueError("discard_time must be finite and nonnegative")
+    n_cycle = _positive_count(n_cycle, "n_cycle")
+    n_phase = _positive_count(n_phase, "n_phase")
+    with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+        period = 2 * np.pi / float(omega)
+    cycle = np.arange(n_cycle, dtype=float)
+    phase_index = np.arange(n_phase, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        sample_times = float(discard_time) + (
+            cycle[:, None] + phase_index[None, :] / n_phase
+        ) * period
+    flat_times = sample_times.ravel()
+    if not np.isfinite(flat_times).all() or not np.all(np.diff(flat_times) > 0):
+        raise ValueError(
+            "sampling times must be finite and strictly increasing at float precision"
+        )
+    if dense_dt is None:
+        return sample_times, None
+    if not np.isfinite(dense_dt) or dense_dt <= 0:
+        raise ValueError("dense_dt must be finite and positive")
+    dense_count = int(np.floor((flat_times[-1] - float(discard_time)) / dense_dt)) + 1
+    dense_times = float(discard_time) + dense_dt * np.arange(dense_count, dtype=float)
+    dense_times = dense_times[dense_times <= flat_times[-1]]
+    return sample_times, dense_times
+
+
 def simulate_phase_and_dense(
     initial_state,
     forcing_vector,
@@ -168,22 +212,11 @@ def simulate_phase_and_dense(
     n_cycle = _positive_count(n_cycle, "n_cycle")
     n_phase = _positive_count(n_phase, "n_phase")
 
-    with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-        period = 2 * np.pi / float(omega)
-    cycle = np.arange(n_cycle, dtype=float)
-    phase_index = np.arange(n_phase, dtype=float)
-    with np.errstate(over="ignore", invalid="ignore"):
-        sample_times = float(discard_time) + (
-            cycle[:, None] + phase_index[None, :] / n_phase
-        ) * period
+    sample_times, dense_times = sampling_grids(
+        omega, discard_time, n_cycle, n_phase, dense_dt
+    )
     flat_times = sample_times.ravel()
-    if not np.isfinite(flat_times).all() or not np.all(np.diff(flat_times) > 0):
-        raise ValueError(
-            "sampling times must be finite and strictly increasing at float precision"
-        )
-    dense_count = int(np.floor((flat_times[-1] - float(discard_time)) / dense_dt)) + 1
-    dense_times = float(discard_time) + dense_dt * np.arange(dense_count, dtype=float)
-    dense_times = dense_times[dense_times <= flat_times[-1]]
+    dense_times = np.asarray(dense_times, dtype=float)
     merged = np.union1d(flat_times, dense_times)
     merged = merged[merged >= flat_times[0]]
     merged = merged[merged <= flat_times[-1]]
