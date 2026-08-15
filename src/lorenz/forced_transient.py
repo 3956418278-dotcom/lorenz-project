@@ -22,10 +22,7 @@ from .artifacts import (
 from .core import _forcing_angle, check_solution, lorenz_rhs
 from .ensemble import SymmetricXYUniformProposal, generate_initial_state_blocks
 from .response import phase_fourier
-
-
-CONDITION_NAMES = ("positive", "negative", "unforced")
-STATE_NAMES = ("x", "y", "z")
+from .strength_study import CONDITION_NAMES, STATE_NAMES
 
 
 @dataclass(frozen=True)

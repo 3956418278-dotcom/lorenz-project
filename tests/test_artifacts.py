@@ -127,12 +127,12 @@ def test_active_source_identifiers_includes_runner_outside_standard_roots(tmp_pa
 def test_repository_fingerprint_covers_indirect_response_dependencies():
     repo_root = Path(__file__).resolve().parents[1]
     identifiers = active_source_identifiers(
-        repo_root, "experiments/run_frequency_reconnaissance.py"
+        repo_root, "experiments/run_direction_reconnaissance.py"
     )
 
     for relative in (
         "src/lorenz/response.py",
         "src/lorenz/strength_series.py",
-        "experiments/run_frequency_reconnaissance.py",
+        "experiments/run_direction_reconnaissance.py",
     ):
         assert identifiers[relative] == f"sha256:{file_sha256(repo_root / relative)}"

@@ -28,7 +28,8 @@ class DirectionDesign:
     quadratic_residual_degrees_of_freedom: int
 
 
-def _build_design(name: str, direction_names, directions) -> DirectionDesign:
+def build_direction_design(name: str, direction_names, directions) -> DirectionDesign:
+    """Build and diagnose a named unit-vector direction design."""
     directions = np.asarray(directions, dtype=float)
     direction_names = tuple(direction_names)
     if directions.ndim != 2 or directions.shape[1] != 3:
@@ -68,7 +69,7 @@ def _build_design(name: str, direction_names, directions) -> DirectionDesign:
 def minimal_quadratic_direction_design() -> DirectionDesign:
     """Return the six-direction full-rank exploratory reconstruction design."""
     inverse_sqrt_two = 1 / np.sqrt(2)
-    return _build_design(
+    return build_direction_design(
         "D6",
         ("x", "y", "z", "xy_plus", "xz_plus", "yz_plus"),
         (
@@ -85,7 +86,7 @@ def minimal_quadratic_direction_design() -> DirectionDesign:
 def balanced_quadratic_direction_design() -> DirectionDesign:
     """Return the nine-direction sum/difference design with residual checks."""
     inverse_sqrt_two = 1 / np.sqrt(2)
-    return _build_design(
+    return build_direction_design(
         "D9",
         (
             "x",

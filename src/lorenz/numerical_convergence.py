@@ -26,8 +26,8 @@ from .artifacts import (
 )
 from .core import _forcing_angle, check_solution, lorenz_rhs
 from .ensemble import SymmetricXYUniformProposal, generate_initial_state_blocks
-from .forced_transient import CONDITION_NAMES, STATE_NAMES
 from .response import phase_fourier
+from .strength_study import CONDITION_NAMES, STATE_NAMES
 
 
 @dataclass(frozen=True)

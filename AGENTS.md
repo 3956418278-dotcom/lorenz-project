@@ -92,58 +92,37 @@ The goal is sufficient context for good decisions, not the smallest possible rea
 
 ## Keep code boundaries stable
 
-Organize code around concepts that change for different reasons.
+Organize code around stable concepts and keep variation with the component that owns it.
 
-When adding or changing a path through the system, distinguish between:
+Put values that vary between runs — parameters, paths, datasets, model instances,
+runtime profiles, experiment settings — in configuration or data rather than
+duplicating code.
 
-- domain or algorithmic logic;
-- experiment or product configuration;
-- runtime environment and resource locations;
-- adapters that translate external data, APIs, files, or services into the project's internal form.
+Before adding a new implementation, ask:
 
-Keep external variation near the edge of the system.
+> Is this a new capability, or just another value, instance, or dimension of an existing one?
 
-A change such as a new dataset location, checkpoint location, mounted resource set, runtime profile, or another instance of an existing type should normally be absorbed by the component that owns that variation.
+If it is the same kind of thing, reuse the existing integration, sampling,
+statistics, persistence, and runtime machinery. Add only the logic that is
+genuinely new.
 
-Core domain or algorithmic code should work with stable internal representations rather than depend directly on where external resources came from.
+Use this change test:
 
-Use this change test when shaping a boundary:
+> If another instance of the same kind were added tomorrow, which code would change?
 
-> If another instance of the same kind were added tomorrow, which code would need to change?
+The answer should normally be the owning configuration, adapter, or local
+variation logic, not unrelated core code.
 
-A healthy boundary keeps that change local.
+Do not abstract hypothetical future needs. But once real implementations start
+copying substantial mechanisms or importing several private helpers from one
+another, consolidate the shared ownership before adding another copy.
 
-Before implementing another variation of an existing workflow, identify what is
-actually new and what should remain shared.
+Keep the active repository focused on current capabilities. Once one-off
+exploratory code has served its decision and is recoverable from committed
+history and artifacts, remove it when nothing active depends on it.
 
-A new variation such as another experiment dimension, dataset of the same kind,
-runtime profile, model instance, analysis slice, or protocol instance should
-reuse the existing owners for the mechanisms that have not changed.
-
-Ask:
-
-> Is this a new capability, or another instance or dimension of an existing capability?
-
-If it is another variation, keep the variation local. Reuse the existing
-integration, sampling, persistence, statistics, runtime, or other stable
-mechanisms where they still represent the same concept.
-
-Concrete repetition is a signal to consolidate. When sibling implementations
-start copying substantial orchestration or infrastructure, or one sibling needs
-several private helpers from another, inspect the ownership boundary before
-adding another copy.
-
-Do not abstract speculative future needs. Let the first implementation stay
-local when the stable concept is not yet clear; consolidate once repetition has
-made the shared mechanism concrete.
-
-When a small change starts affecting unrelated areas, inspect the ownership and interface before expanding the patch.
-
-Let known future variations shape an interface when they are already part of the intended project.
-
-Introduce a new abstraction when a real, stable concept appears. Prefer clear ownership and stable interfaces over wrappers, managers, registries, or compatibility layers that have no concrete job yet.
-
-Local complexity is acceptable when the problem requires it. Keep that complexity from spreading into unrelated parts of the project.
+Local complexity is acceptable when the problem requires it; do not let it
+propagate through the system.
 
 ---
 

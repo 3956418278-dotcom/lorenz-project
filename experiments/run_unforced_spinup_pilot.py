@@ -20,7 +20,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT / "configs/exploratory/unforced_spinup_convergence.json",
+        default=REPO_ROOT / "configs/exploratory/unforced_spinup_refinement.json",
     )
     arguments = parser.parse_args()
     output_dir, manifest, runtime = run_spinup_study(arguments.config)

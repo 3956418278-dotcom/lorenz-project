@@ -3,10 +3,23 @@ import numpy as np
 from lorenz.direction_design import (
     INPUT_PAIR_ORDER,
     balanced_quadratic_direction_design,
+    build_direction_design,
     lorenz_effective_quadratic_sector_mask,
     lorenz_linear_sector_mask,
     minimal_quadratic_direction_design,
 )
+
+
+def test_public_direction_design_builder_owns_rank_diagnostics():
+    expected = minimal_quadratic_direction_design()
+    built = build_direction_design(
+        "configured", expected.direction_names, expected.directions
+    )
+
+    assert built.name == "configured"
+    assert built.linear_rank == 3
+    assert built.quadratic_rank == 6
+    assert built.quadratic_residual_degrees_of_freedom == 0
 
 
 def test_d6_is_minimal_full_rank_without_quadratic_residuals():

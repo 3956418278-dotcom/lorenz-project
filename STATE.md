@@ -79,27 +79,21 @@
 - Numerical-convergence diagnostics separately compare nested observation
   prefixes, nested and shifted phase subgrids, and solver profiles using
   block-level Fourier contrasts rather than pathwise chaotic trajectories.
-- Strength-identifiability diagnostics fit block-level raw contrasts with
-  `h+h^3` or `h^2+h^4` terms, retain joint real/imaginary covariance, compare
-  adjacent normalized responses, and keep target and non-target harmonics.
+- Shared strength-study primitives integrate configured crossed strengths,
+  preserve per-cycle Fourier summaries, fit block-level raw contrasts with
+  `h+h^3` or `h^2+h^4` terms, and keep target and non-target harmonics.
 - Whole-block bootstrap inference resamples every crossed strength, condition,
   component, real/imaginary coordinate, and observation prefix jointly. It
   reports signal identification separately from higher-order adequacy and
   fails closed when a leading denominator is unresolved.
-- Within-block observation diagnostics use cycle prefixes and non-overlapping
-  windows without treating cycles as replication. They estimate variance
-  scaling across blocks and preserve the distinction between point-estimate
-  instability, window-position variation, and sampling uncertainty.
-- Frequency reconnaissance uses a response-independent octave grid, shared
-  blocks, a single across-frequency bootstrap family, and observation windows
-  that record both minimum cycles and physical duration.
-- Held-out variance-reduction validation treats the second-harmonic unforced
-  coefficient as a retained bias diagnostic rather than automatically adding
-  it to the response estimator. DC baseline subtraction remains a distinct
-  two-source estimation problem.
+- Direction-design and reconnaissance capabilities reconstruct block-level
+  tensors across crossed forcing directions and frequencies, diagnose Lorenz
+  parity sectors, and preserve the unforced second harmonic separately from
+  the working second-harmonic estimator. The current reconnaissance runner has
+  not been executed.
 - Analytic synthetic-signal verification of Fourier signs, factors, complex
-  susceptibility recovery, and direction reconstruction. Current test result:
-  `91 passed`.
+  susceptibility recovery, and direction reconstruction. Current active test
+  result: `99 passed`.
 
 ## Not Yet Confirmed
 

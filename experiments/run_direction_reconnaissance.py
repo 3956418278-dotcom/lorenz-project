@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the minimal fixed-grid frequency reconnaissance."""
+"""Run the fixed D6 by F3 forcing-direction reconnaissance."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from lorenz.frequency_reconnaissance import run_frequency_reconnaissance
+from lorenz.direction_reconnaissance import run_direction_reconnaissance
 
 
 def main() -> None:
@@ -20,11 +20,10 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT
-        / "configs/exploratory/frequency_reconnaissance.json",
+        default=REPO_ROOT / "configs/exploratory/direction_reconnaissance.json",
     )
     arguments = parser.parse_args()
-    output_dir, manifest, runtime = run_frequency_reconnaissance(arguments.config)
+    output_dir, manifest, runtime = run_direction_reconnaissance(arguments.config)
     print(
         json.dumps(
             {
@@ -32,9 +31,7 @@ def main() -> None:
                 "output_dir": str(output_dir),
                 "runtime_seconds": runtime,
                 "config_identifier": manifest["provenance"]["config_identifier"],
-                "bootstrap_critical_value": manifest["joint_bootstrap"]["coverage"][
-                    "critical_value"
-                ],
+                "bootstrap_critical_value": manifest["coverage"]["critical_value"],
             },
             indent=2,
         )

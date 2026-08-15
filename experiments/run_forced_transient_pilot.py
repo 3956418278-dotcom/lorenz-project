@@ -21,7 +21,7 @@ def main() -> None:
         "--config",
         type=Path,
         default=REPO_ROOT
-        / "configs/exploratory/forced_transient_convergence.json",
+        / "configs/exploratory/forced_transient_late_windows.json",
     )
     arguments = parser.parse_args()
     output_dir, manifest, runtime = run_forced_transient_study(arguments.config)
@@ -41,4 +41,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

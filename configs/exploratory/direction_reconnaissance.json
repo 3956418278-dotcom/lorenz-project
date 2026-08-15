@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "study_id": "minimal_direction_reconnaissance_d6_f3_v1",
+  "classification": "exploratory_direction_reconnaissance",
+  "output_root": "outputs/exploratory/direction_reconnaissance",
+  "runner_path": "experiments/run_direction_reconnaissance.py",
+  "direction_design": {
+    "name": "D6",
+    "direction_names": ["x", "y", "z", "xy_plus", "xz_plus", "yz_plus"],
+    "directions": [
+      [1.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0],
+      [0.0, 0.0, 1.0],
+      [0.7071067811865475, 0.7071067811865475, 0.0],
+      [0.7071067811865475, 0.0, 0.7071067811865475],
+      [0.0, 0.7071067811865475, 0.7071067811865475]
+    ]
+  },
+  "frequencies": [0.5, 2.0, 8.0],
+  "block_count": 32,
+  "workers": 8,
+  "strengths": [0.25, 0.5, 1.0, 2.0, 3.0, 4.0],
+  "discard_time": 160.0,
+  "n_phase": 32,
+  "harmonics": [0, 1, 2, 3, 4, 5],
+  "observation_rule": {
+    "minimum_cycles": 64,
+    "minimum_physical_time": 200.0
+  },
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-09,
+    "atol": 1e-11
+  },
+  "initial_ensemble": {
+    "root_entropy": 2026081405,
+    "block_id_start": 2500000,
+    "spinup_time": 40.0,
+    "proposal": {
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [0.0, 50.0]
+    }
+  },
+  "protocol": {
+    "status": "provisional_direction_design_diagnostic_only",
+    "phase": 0.0
+  },
+  "reuse_heldout_direction": {
+    "artifact": "outputs/exploratory/variance_reduction_heldout/20260814T141349_2694329f4136",
+    "manifest_sha256": "d4f9cac8ae4fe92ef404dcced2d39de0ee13ec3ec4fd5bbf25f06cf117905965",
+    "direction_name": "x",
+    "direction_index": 0
+  },
+  "bootstrap": {
+    "confidence": 0.95,
+    "resamples": 9999,
+    "root_entropy": 2026081501,
+    "batch_size": 64,
+    "higher_order_fraction_limit": 0.2
+  }
+}

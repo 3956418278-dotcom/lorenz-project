@@ -20,6 +20,7 @@ from .response import phase_fourier
 
 
 STATE_NAMES = ("x", "y", "z")
+CONDITION_NAMES = ("positive", "negative", "unforced")
 
 
 @dataclass(frozen=True)
