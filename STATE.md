@@ -82,6 +82,14 @@
 - Shared strength-study primitives integrate configured crossed strengths,
   preserve per-cycle Fourier summaries, fit block-level raw contrasts with
   `h+h^3` or `h^2+h^4` terms, and keep target and non-target harmonics.
+- The x-direction dense response pilot composes those primitives with: uniform
+  per-frequency cells, block-level retention (cycle-mean Fourier plus
+  across-cycle variances; per-cycle kept only for a small representative
+  subset), dense fixed-dt summaries per block (folded phase-conditioned mean on
+  256 theta bins, Welch PSD of the residual, small raw segments), and a
+  per-frequency detection/adequacy family (identification per strength,
+  fitted c1/c2/c3/c4 coefficients, direct harmonics n=3,4,5, nested-prefix
+  adequacy, four-state interpretation).
 - Whole-block bootstrap inference resamples every crossed strength, condition,
   component, real/imaginary coordinate, and observation prefix jointly. It
   reports signal identification separately from higher-order adequacy and
@@ -150,18 +158,41 @@ and one of eight symmetry-allowed entries in each effective quadratic tensor.
 An x-only observation extension therefore cannot determine the full-tensor
 sampling budget.
 
-The next blocker is minimal forcing-direction reconnaissance. The recommended
-fixed exploratory design uses the six full-rank directions
-`ex, ey, ez, (ex+ey)/sqrt(2), (ex+ez)/sqrt(2), (ey+ez)/sqrt(2)` at the
-response-independent low/mid/high frequencies `0.5, 2, 8`, with the same 32
-blocks, six strengths, working A2 estimator, and numerical profile. Existing x
-trajectories can be reused. The projected new cost is 5,760 integrations, about
-73 minutes and 202 MiB of raw summaries. This is an important resource choice
-and is not yet authorized. DC continues to require unforced mean subtraction;
-its common high-precision `mu0` baseline should be designed only after the
-frequency/direction family is known. The simultaneous 95% and 20% criteria
-remain provisional design criteria, not the final scientific meaning of
-negligible higher order.
+The executed x-direction dense response pilot (12 frequencies `0.5`-`22.6`,
+half-octave grid, strengths `{0.25, 0.5, 1, 2}` at B=64 with observation
+`max(64 cycles, 400 time)`; anchors `{0.5, 1, 4, 8}` extended to six strengths)
+gives the first result-level picture of the x-direction response:
+
+- chi1_xx(omega) is a resolved landscape: a plateau near `0.16-0.20` at
+  `omega <= 2`, a dip near the intrinsic band (`omega = 2.8-4`), a secondary
+  peak at `5.6`, and a clean falloff above `omega0 ~ 10.2` (down to
+  `0.041 +/- 0.003` at `22.6`).
+- Second order remains undetected everywhere. The simultaneous-95% result is
+  now a quantitative bound: `|chi2z|` below roughly `0.1` across the grid
+  (largest points `omega=1.4: 0.097 +/- 0.053`, `omega=2: 0.076 +/- 0.065`);
+  `Qdc z` below roughly `0.03` (largest `omega=11.3: 0.026 +/- 0.009`).
+- The fitted higher-order coefficients c3/c4 and the direct harmonics
+  n=3,4,5 are NOT detected at any frequency or strength, while the provisional
+  20% negligibility bounds fail at the odd anchors. Detection is reported
+  separately from negligibility: "bound fails" does not imply significance.
+  The validity map therefore contains no "bounded small" cells: the
+  identification window (first order, `h >= 1-2`) and the adequacy window do
+  not overlap under the current provisional rule.
+- c1 precision: 6-strength anchors measure SE `0.0065-0.0123` (projection
+  met); the 4-strength dense cells carry `~0.023` (the plan's `0.0105` figure
+  assumed the 6-strength fit). c2 SEs at the anchors measure
+  `0.0017-0.0072` (projections met).
+
+The next decision is the direction extension: the deferred six-direction
+design (now informed by the measured x-direction noise scales and the
+per-frequency family machinery) versus accepting the x-only scope for the
+near term. The second-order weakness is now quantified rather than merely
+unresolved, so the direction design can be budgeted against a stated
+bound-level target for the quadratic tensor. DC continues to require unforced
+mean subtraction; its common high-precision `mu0` baseline should be designed
+only after the frequency/direction family is known. The simultaneous 95% and
+20% criteria remain provisional design criteria, not the final scientific
+meaning of negligible higher order.
 
 ## Delegated Design Conclusions
 
@@ -236,6 +267,26 @@ negligible higher order.
   establish identification. DC still needs a common uncertain `mu0` baseline;
   separate per-frequency baselines are not justified.
   Artifact: `outputs/exploratory/variance_reduction_heldout/20260814T141349_2694329f4136/`.
+- A supervisor-discussion figure set renders the above stored evidence for the
+  three questions (distinguishability, numerical accuracy vs noise, higher-order
+  significance). It is a view of existing artifacts, not new evidence; the one
+  illustrative panel (phase-resolved reconstruction) is labeled as such.
+  Artifact: `outputs/figures/supervisor_evidence_20260815/` (`make_figures.py`,
+  `fig{1..4}*.png/pdf`, `notes.md`).
+- The x-direction dense response pilot (executed): dense grid artifact
+  `outputs/exploratory/x_response_dense_v1/20260815T120543_3e1cb15bc6f3/`,
+  c2-extras artifact
+  `outputs/exploratory/x_response_c2_extras_v1/20260815T122332_1a3ae1d04b23/`,
+  merged analysis artifact
+  `outputs/exploratory/x_response_merged_v1/20260815T122412_merged/`.
+  Verification against the pre-declared budgets and the stored reconnaissance
+  passed (see `outputs/figures/x_response_results/verify_results.py`).
+- Result figure set for the pilot: `outputs/figures/x_response_results/`
+  (`make_figures.py`, `fig{1..4}*.png/pdf`, `notes.md`): response spectrum with
+  same-estimator sampling uncertainty and a separately labeled descriptive
+  Welch background; fitted c1/c2 frequency curves converted per PROJECT.md
+  with a finite-strength convergence panel; strength scaling with leading-power
+  guides and direct higher harmonics; the four-state validity map.
 
 ## Working Constraints
 

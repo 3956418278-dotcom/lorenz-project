@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "study_id": "x_direction_c2_extras_v1",
+  "classification": "exploratory_x_direction_response_extras",
+  "output_root": "outputs/exploratory/x_response_c2_extras_v1",
+  "runner_path": "experiments/run_x_response_pilot.py",
+  "frequencies": [0.5, 1.0, 4.0, 8.0],
+  "strengths": [3.0, 4.0],
+  "block_count": 64,
+  "workers": 8,
+  "discard_time": 160.0,
+  "n_phase": 32,
+  "harmonics": [0, 1, 2, 3, 4, 5],
+  "observation_rule": {
+    "minimum_cycles": 64,
+    "minimum_physical_time": 400.0
+  },
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-09,
+    "atol": 1e-11
+  },
+  "initial_ensemble": {
+    "root_entropy": 2026081405,
+    "block_id_start": 2400000,
+    "spinup_time": 40.0,
+    "proposal": {
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [0.0, 50.0]
+    }
+  },
+  "protocol": {
+    "status": "x_direction_c2_extras_pilot",
+    "direction": [1.0, 0.0, 0.0],
+    "phase": 0.0
+  },
+  "dense": {
+    "dt": 0.05,
+    "n_theta_bins": 256,
+    "welch_segment": 512,
+    "max_psd_bins": 256,
+    "raw_segment_blocks": 0,
+    "raw_segment_samples": 0
+  },
+  "bootstrap": {
+    "confidence": 0.95,
+    "resamples": 9999,
+    "root_entropy": 2026081502,
+    "batch_size": 64,
+    "higher_order_fraction_limit": 0.2
+  }
+}

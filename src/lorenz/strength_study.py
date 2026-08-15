@@ -14,7 +14,7 @@ import math
 
 import numpy as np
 
-from .core import simulate_phase_samples
+from .core import simulate_phase_samples, simulate_phase_and_dense
 from .ensemble import SymmetricXYUniformProposal, generate_initial_state_blocks
 from .response import phase_fourier
 
@@ -448,3 +448,218 @@ def harmonic_role(contrast: str, harmonic: int) -> str:
     if (harmonic % 2 == 1) == (contrast == "odd"):
         return "allowed_higher_harmonic"
     return "parity_forbidden_harmonic"
+
+
+# --------------------------------------------------------------------------
+# dense spectral summaries
+# --------------------------------------------------------------------------
+
+DENSE_AXES = ("state", "theta_bin")
+PSD_AXES = ("state", "frequency_bin")
+
+
+@dataclass(frozen=True)
+class DenseTrajectorySummary:
+    """Block-level dense spectral summaries for one trajectory.
+
+    ``folded_cycle_mean`` has axes ``state, theta_bin``: the phase-conditioned
+    mean folded onto a dense forcing-phase grid from fixed-dt samples.
+    ``welch_psd`` has axes ``state, frequency_bin``: the one-sided Welch
+    periodogram of the residual after removing the folded cycle mean.
+    ``segment_count`` records how many Hann-windowed segments contributed.
+    ``raw_values`` / ``raw_times`` are optionally retained dense samples.
+    """
+
+    folded_cycle_mean: np.ndarray
+    welch_psd: np.ndarray
+    segment_count: int
+    raw_values: np.ndarray
+    raw_times: np.ndarray
+    dense_dt: float
+    frequency_step: float
+    nyquist: float
+    maximum_frequency: float
+
+
+def dense_trajectory_summary(
+    dense_values,
+    dense_times,
+    omega: float,
+    phase: float,
+    n_theta_bins: int,
+    welch_segment: int,
+    max_psd_bins: int,
+    raw_samples: int,
+) -> DenseTrajectorySummary:
+    """Summarize dense samples into folded mean, Welch PSD, and raw segment."""
+    dense_values = np.asarray(dense_values, dtype=float)
+    dense_times = np.asarray(dense_times, dtype=float)
+    if dense_values.ndim != 2 or dense_values.shape[0] != 3:
+        raise ValueError("dense values must have axes state,time")
+    if dense_times.shape != (dense_values.shape[1],):
+        raise ValueError("dense times must match the time axis")
+    if len(dense_times) < 2 or np.any(np.diff(dense_times) <= 0):
+        raise ValueError("dense times must be strictly increasing")
+    n_theta_bins = int(n_theta_bins)
+    welch_segment = int(welch_segment)
+    max_psd_bins = int(max_psd_bins)
+    if n_theta_bins < 32 or welch_segment < 16 or max_psd_bins < 8:
+        raise ValueError("dense summary settings are too small")
+    dt = float(np.median(np.diff(dense_times)))
+    theta = np.mod(omega * dense_times + phase, 2 * np.pi)
+    folded_mean = np.empty((3, n_theta_bins), dtype=float)
+    for state in range(3):
+        folded_mean[state] = np.bincount(
+            np.floor(theta / (2 * np.pi) * n_theta_bins).astype(int),
+            weights=dense_values[state],
+            minlength=n_theta_bins,
+        ) / np.maximum(
+            np.bincount(
+                np.floor(theta / (2 * np.pi) * n_theta_bins).astype(int),
+                minlength=n_theta_bins,
+            ),
+            1,
+        )
+    residual = dense_values - folded_mean[
+        :, np.floor(theta / (2 * np.pi) * n_theta_bins).astype(int)
+    ]
+    window = np.hanning(welch_segment)
+    total_bins = min(max_psd_bins, welch_segment // 2)
+    psd = np.zeros((3, total_bins), dtype=float)
+    segment_count = 0
+    offset = 0
+    while offset + welch_segment <= residual.shape[1]:
+        segment = residual[:, offset : offset + welch_segment]
+        spectrum = np.fft.rfft(segment * window[None, :], axis=1)
+        psd += np.abs(spectrum[:, :total_bins]) ** 2
+        segment_count += 1
+        offset += welch_segment
+    if segment_count == 0:
+        raise ValueError("dense window is shorter than one Welch segment")
+    window_energy = float(np.sum(window**2))
+    psd *= 2.0 / (welch_segment * dt * window_energy * segment_count)
+    raw_values = np.asarray(dense_values[:, : int(raw_samples)], dtype=float)
+    raw_times = np.asarray(dense_times[: int(raw_samples)], dtype=float)
+    frequency_step = 2 * np.pi / (welch_segment * dt)
+    return DenseTrajectorySummary(
+        folded_cycle_mean=folded_mean,
+        welch_psd=psd,
+        segment_count=segment_count,
+        raw_values=raw_values,
+        raw_times=raw_times,
+        dense_dt=dt,
+        frequency_step=float(frequency_step),
+        nyquist=float(np.pi / dt),
+        maximum_frequency=float((total_bins - 1) * frequency_step),
+    )
+
+
+def _integrate_phase_and_dense(arguments):
+    initial_state, forcing, sampling, dense_config, numerical_config = arguments
+    phase_samples, dense_values, dense_times = simulate_phase_and_dense(
+        initial_state,
+        forcing,
+        sampling.omega,
+        sampling.phase,
+        sampling.discard_time,
+        sampling.n_cycle,
+        sampling.n_phase,
+        dense_config["dt"],
+        numerical_config,
+    )
+    fourier = phase_fourier(
+        phase_samples.values, sampling.harmonics, phase_samples.phase_offset
+    )
+    summary = dense_trajectory_summary(
+        dense_values,
+        dense_times,
+        sampling.omega,
+        sampling.phase,
+        dense_config["n_theta_bins"],
+        dense_config["welch_segment"],
+        dense_config["max_psd_bins"],
+        dense_config.get("raw_segment_samples", 0),
+    )
+    return fourier, summary
+
+
+def integrate_phase_and_dense_conditions(
+    block_ids,
+    initial_states,
+    forcing_vectors,
+    sampling: CycleFourierSampling,
+    dense_config: dict,
+    numerical_config: dict,
+    *,
+    workers: int = 1,
+    raw_segment_blocks: int = 0,
+):
+    """Integrate once per block-by-condition cell into Fourier plus dense summaries.
+
+    The Fourier result axes are ``block, condition, state, cycle, harmonic``
+    exactly as :func:`integrate_cycle_fourier_conditions`.  Dense summaries
+    are returned as a matching ``block, condition`` array of
+    :class:`DenseTrajectorySummary`; raw dense segments are retained only for
+    the first ``raw_segment_blocks`` blocks.
+    """
+    block_ids = tuple(block_ids)
+    initial_states = np.asarray(initial_states, dtype=float)
+    forcing_vectors = np.asarray(forcing_vectors, dtype=float)
+    workers = _positive_integer(workers, "workers")
+    raw_segment_blocks = int(raw_segment_blocks)
+    if len(block_ids) < 1 or len(set(block_ids)) != len(block_ids):
+        raise ValueError("block_ids must be nonempty and unique")
+    if initial_states.shape != (len(block_ids), 3) or not np.isfinite(initial_states).all():
+        raise ValueError("initial_states must have finite axes block,state")
+    if (
+        forcing_vectors.ndim != 2
+        or forcing_vectors.shape[0] < 1
+        or forcing_vectors.shape[1] != 3
+        or not np.isfinite(forcing_vectors).all()
+    ):
+        raise ValueError("forcing_vectors must have finite axes condition,state")
+    if not isinstance(sampling, CycleFourierSampling):
+        raise TypeError("sampling must be a CycleFourierSampling")
+    if raw_segment_blocks < 0 or raw_segment_blocks > len(block_ids):
+        raise ValueError("raw_segment_blocks must lie within the block axis")
+    required = {"dt", "n_theta_bins", "welch_segment", "max_psd_bins"}
+    if not required.issubset(dense_config):
+        raise ValueError("dense config requires dt, n_theta_bins, welch_segment, max_psd_bins")
+    tasks = [
+        (
+            initial_states[block_index],
+            forcing,
+            sampling,
+            {
+                **dense_config,
+                "raw_segment_samples": (
+                    int(dense_config.get("raw_segment_samples", 0))
+                    if block_index < raw_segment_blocks
+                    else 0
+                ),
+            },
+            numerical_config,
+        )
+        for block_index in range(len(block_ids))
+        for forcing in forcing_vectors
+    ]
+    if workers == 1:
+        integrated = list(map(_integrate_phase_and_dense, tasks))
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            integrated = list(executor.map(_integrate_phase_and_dense, tasks))
+    fourier = np.asarray([item[0] for item in integrated]).reshape(
+        len(block_ids),
+        len(forcing_vectors),
+        3,
+        sampling.n_cycle,
+        len(sampling.harmonics),
+    )
+    summary_flat = [item[1] for item in integrated]
+    summaries = np.empty((len(block_ids), len(forcing_vectors)), dtype=object)
+    for block_index in range(len(block_ids)):
+        for condition in range(len(forcing_vectors)):
+            summaries[block_index, condition] = summary_flat[
+                block_index * len(forcing_vectors) + condition
+            ]
+    return fourier, summaries

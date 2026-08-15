@@ -90,6 +90,11 @@ provided it is clearly separated from inferential evidence and labeled according
 When the available evidence cannot answer a question, present that limitation directly
 rather than replacing it with a more elaborate diagnostic.
 
+Distinguish carefully between "not established", "inconsistent with", and
+"established". Failure to establish a desired bound is not evidence that the
+bound is violated. Never strengthen a scientific claim merely to make a result,
+diagnostic, or figure more decisive.
+
 ## Read context with a purpose
 
 Use the context needed to make the current decision well.
