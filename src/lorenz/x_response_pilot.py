@@ -307,8 +307,42 @@ def _write_chunk_file(
     write_block_level_chunk(path, arrays)
 
 
+def _proposal_from_config(config: dict):
+    proposal_cfg = config["initial_ensemble"]["proposal"]
+    return SymmetricXYUniformProposal(
+        x_half_width=proposal_cfg["x_half_width"],
+        y_half_width=proposal_cfg["y_half_width"],
+        z_bounds=tuple(proposal_cfg["z_bounds"]),
+    )
+
+
+def generate_production_blocks(config: dict):
+    """Generate the initial-state blocks of one run configuration.
+
+    Shared by every frequency cell of the run: the blocks depend only on the
+    initial-ensemble settings, so they are generated once and reused instead
+    of being re-integrated per frequency.
+    """
+    initial = config["initial_ensemble"]
+    block_id_start = int(initial["block_id_start"])
+    block_count = int(config["block_count"])
+    block_ids = tuple(range(block_id_start, block_id_start + block_count))
+    numerical_config = {
+        "lorenz": dict(config["lorenz"]),
+        "solver": dict(config["solver"]),
+    }
+    return generate_initial_state_blocks(
+        block_ids,
+        initial["root_entropy"],
+        _proposal_from_config(config),
+        float(initial["spinup_time"]),
+        numerical_config,
+    )
+
+
 def generate_x_response_cell(
-    config: dict, omega: float, strengths, cycles: int, block_level_dir=None
+    config: dict, omega: float, strengths, cycles: int, block_level_dir=None,
+    precomputed_blocks=None,
 ) -> XResponseCell:
     """Integrate one frequency cell with paired forcing and dense summaries.
 
@@ -316,31 +350,24 @@ def generate_x_response_cell(
     Fourier, phase-grid samples, dense trajectories, complex block spectra)
     are written chunk-by-chunk into ``block_level_dir`` according to the
     configured retention policy; the in-memory cell carries only the
-    block-level summaries the analysis family consumes.
+    block-level summaries the analysis family consumes.  Pass
+    ``precomputed_blocks`` (from :func:`generate_production_blocks`) to
+    share one block generation across every frequency of a run.
     """
     started = time.perf_counter()
     block_count = int(config["block_count"])
     workers = int(config.get("workers", 1))
-    initial = config["initial_ensemble"]
-    block_id_start = int(initial["block_id_start"])
+    block_id_start = int(config["initial_ensemble"]["block_id_start"])
     block_ids = tuple(range(block_id_start, block_id_start + block_count))
-    proposal_cfg = initial["proposal"]
-    proposal = SymmetricXYUniformProposal(
-        x_half_width=proposal_cfg["x_half_width"],
-        y_half_width=proposal_cfg["y_half_width"],
-        z_bounds=tuple(proposal_cfg["z_bounds"]),
-    )
+    if precomputed_blocks is None:
+        blocks = generate_production_blocks(config)
+    else:
+        blocks = precomputed_blocks
+    proposal = _proposal_from_config(config)
     numerical_config = {
         "lorenz": dict(config["lorenz"]),
         "solver": dict(config["solver"]),
     }
-    blocks = generate_initial_state_blocks(
-        block_ids,
-        initial["root_entropy"],
-        proposal,
-        float(initial["spinup_time"]),
-        numerical_config,
-    )
     protocol = config["protocol"]
     direction = np.asarray(protocol["direction"], dtype=float)
     strengths = _checked_strengths(strengths, minimum_count=2)
@@ -360,6 +387,16 @@ def generate_x_response_cell(
         harmonics=np.asarray(config["harmonics"], dtype=int),
     )
     dense_config = dict(config["dense"])
+    # Physical per-cell spectrum cap (retention decision): the continuous
+    # display spectrum is stored up to min(pi/dt, cap * omega), so a fixed
+    # harmonic range costs the same physical range at every frequency.
+    if dense_config.get("spectrum_harmonic_cap") is not None:
+        cap = float(dense_config["spectrum_harmonic_cap"])
+        if cap <= 0:
+            raise ValueError("dense.spectrum_harmonic_cap must be positive")
+        dense_config["spectrum_max_omega"] = min(
+            np.pi / float(dense_config["dt"]), cap * omega
+        )
     raw_segment_blocks = int(dense_config.get("raw_segment_blocks", 0))
     policy = parse_retention_policy(config, block_count)
     condition_count = 1 + 2 * len(strengths)
@@ -542,6 +579,81 @@ def generate_x_response_cell(
     )
 
 
+def _load_cell(raw, prefix: str, omega: float, config_snapshot, n_phase: int):
+    """Reconstruct one frequency cell from prefixed summary arrays.
+
+    Used both for the full summary archive and for per-frequency resume
+    checkpoints (which store the same prefixed keys).  The per-cycle axis is
+    restored with a single slot; cycle variances are loaded when present.
+    """
+    block_ids = tuple(int(value) for value in raw[f"{prefix}_block_ids"])
+    strengths = np.asarray(raw[f"{prefix}_strengths"], dtype=float)
+    harmonics = np.asarray(raw[f"{prefix}_harmonics"], dtype=int)
+    positive = np.asarray(raw[f"{prefix}_positive_cycle_mean"])
+    negative = np.asarray(raw[f"{prefix}_negative_cycle_mean"])
+    unforced = np.asarray(raw[f"{prefix}_unforced_cycle_mean"])
+    study = StrengthStudyData(
+        block_ids=block_ids,
+        strengths=strengths,
+        harmonics=harmonics,
+        omega=omega,
+        n_phase=_artifact_n_phase(raw, prefix, config_snapshot, n_phase),
+        positive_cycle_fourier=positive[:, :, :, None, :],
+        negative_cycle_fourier=negative[:, :, :, None, :],
+        unforced_cycle_fourier=unforced[:, :, None, :],
+        raw_proposals=np.asarray(raw[f"{prefix}_raw_proposals"]),
+        initial_states=np.asarray(raw[f"{prefix}_initial_states"]),
+        child_spawn_keys=tuple(
+            tuple(int(item) for item in row)
+            for row in raw[f"{prefix}_child_spawn_keys"]
+        ),
+        generation_metadata={},
+    )
+    cycle_variances = None
+    if f"{prefix}_positive_cycle_variance" in raw.files:
+        cycle_variances = {
+            "positive": np.asarray(raw[f"{prefix}_positive_cycle_variance"]),
+            "negative": np.asarray(raw[f"{prefix}_negative_cycle_variance"]),
+            "unforced": np.asarray(raw[f"{prefix}_unforced_cycle_variance"]),
+        }
+    cell = XResponseCell(
+        omega=omega,
+        study=study,
+        folded_cycle_mean=(
+            np.asarray(raw[f"{prefix}_folded_cycle_mean"])
+            if f"{prefix}_folded_cycle_mean" in raw.files
+            else None
+        ),
+        welch_psd=(
+            np.asarray(raw[f"{prefix}_welch_psd"])
+            if f"{prefix}_welch_psd" in raw.files
+            else None
+        ),
+        segment_counts=(
+            np.asarray(raw[f"{prefix}_segment_counts"])
+            if f"{prefix}_segment_counts" in raw.files
+            else None
+        ),
+        raw_segments={
+            "values": np.asarray(raw[f"{prefix}_raw_segment_values"]),
+            "times": np.asarray(raw[f"{prefix}_raw_segment_times"]),
+        }
+        if f"{prefix}_raw_segment_values" in raw.files
+        else {},
+        dense_metadata=(
+            json.loads(str(np.asarray(raw[f"{prefix}_dense_metadata"])))
+            if f"{prefix}_dense_metadata" in raw.files
+            else {}
+        ),
+        runtime_seconds=0.0,
+        cycle_variances=cycle_variances,
+        sampling_metadata=_load_sampling_metadata(
+            raw, prefix, omega, config_snapshot
+        ),
+    )
+    return _attach_legacy_subset(cell, raw, prefix, block_ids)
+
+
 def load_x_response_cells(
     raw_path, n_phase: int = 32, *, load_block_level: bool = True
 ) -> dict:
@@ -570,65 +682,9 @@ def load_x_response_cells(
         for name in sorted(frequency_names):
             prefix = f"omega_{name}"
             omega = float(name.replace("p", ".").replace("m", "-"))
-            block_ids = tuple(int(value) for value in raw[f"{prefix}_block_ids"])
-            strengths = np.asarray(raw[f"{prefix}_strengths"], dtype=float)
-            harmonics = np.asarray(raw[f"{prefix}_harmonics"], dtype=int)
-            positive = np.asarray(raw[f"{prefix}_positive_cycle_mean"])
-            negative = np.asarray(raw[f"{prefix}_negative_cycle_mean"])
-            unforced = np.asarray(raw[f"{prefix}_unforced_cycle_mean"])
-            study = StrengthStudyData(
-                block_ids=block_ids,
-                strengths=strengths,
-                harmonics=harmonics,
-                omega=omega,
-                n_phase=_artifact_n_phase(raw, prefix, config_snapshot, n_phase),
-                positive_cycle_fourier=positive[:, :, :, None, :],
-                negative_cycle_fourier=negative[:, :, :, None, :],
-                unforced_cycle_fourier=unforced[:, :, None, :],
-                raw_proposals=np.asarray(raw[f"{prefix}_raw_proposals"]),
-                initial_states=np.asarray(raw[f"{prefix}_initial_states"]),
-                child_spawn_keys=tuple(
-                    tuple(int(item) for item in row)
-                    for row in raw[f"{prefix}_child_spawn_keys"]
-                ),
-                generation_metadata={},
+            cells[omega] = _load_cell(
+                raw, prefix, omega, config_snapshot, n_phase
             )
-            cell = XResponseCell(
-                omega=omega,
-                study=study,
-                folded_cycle_mean=(
-                    np.asarray(raw[f"{prefix}_folded_cycle_mean"])
-                    if f"{prefix}_folded_cycle_mean" in raw.files
-                    else None
-                ),
-                welch_psd=(
-                    np.asarray(raw[f"{prefix}_welch_psd"])
-                    if f"{prefix}_welch_psd" in raw.files
-                    else None
-                ),
-                segment_counts=(
-                    np.asarray(raw[f"{prefix}_segment_counts"])
-                    if f"{prefix}_segment_counts" in raw.files
-                    else None
-                ),
-                raw_segments={
-                    "values": np.asarray(raw[f"{prefix}_raw_segment_values"]),
-                    "times": np.asarray(raw[f"{prefix}_raw_segment_times"]),
-                }
-                if f"{prefix}_raw_segment_values" in raw.files
-                else {},
-                dense_metadata=(
-                    json.loads(str(np.asarray(raw[f"{prefix}_dense_metadata"])))
-                    if f"{prefix}_dense_metadata" in raw.files
-                    else {}
-                ),
-                runtime_seconds=0.0,
-                sampling_metadata=_load_sampling_metadata(
-                    raw, prefix, omega, config_snapshot
-                ),
-            )
-            cell = _attach_legacy_subset(cell, raw, prefix, block_ids)
-            cells[omega] = cell
     finally:
         raw.close()
     if load_block_level:
@@ -1504,6 +1560,56 @@ def analyze_x_response(cells: dict, config: dict) -> dict:
     }
 
 
+def _cell_summary_arrays(cell: XResponseCell, prefix: str) -> dict:
+    """Per-frequency summary arrays for the archive and checkpoints.
+
+    The arrays are the derived summaries plus the condition identity and
+    sampling grids of one frequency cell; the block-level raw objects live
+    in the chunk files.
+    """
+    arrays = {}
+    study = cell.study
+    arrays[f"{prefix}_block_ids"] = np.asarray(study.block_ids, dtype=np.uint32)
+    arrays[f"{prefix}_strengths"] = study.strengths
+    arrays[f"{prefix}_harmonics"] = study.harmonics
+    arrays[f"{prefix}_raw_proposals"] = study.raw_proposals
+    arrays[f"{prefix}_initial_states"] = study.initial_states
+    arrays[f"{prefix}_child_spawn_keys"] = np.asarray(
+        study.child_spawn_keys, dtype=np.uint32
+    )
+    positive_mean = study.positive_cycle_fourier.mean(axis=-2)
+    negative_mean = study.negative_cycle_fourier.mean(axis=-2)
+    unforced_mean = study.unforced_cycle_fourier.mean(axis=-2)
+    arrays[f"{prefix}_positive_cycle_mean"] = positive_mean
+    arrays[f"{prefix}_negative_cycle_mean"] = negative_mean
+    arrays[f"{prefix}_unforced_cycle_mean"] = unforced_mean
+    if cell.cycle_variances is not None:
+        arrays[f"{prefix}_positive_cycle_variance"] = cell.cycle_variances["positive"]
+        arrays[f"{prefix}_negative_cycle_variance"] = cell.cycle_variances["negative"]
+        arrays[f"{prefix}_unforced_cycle_variance"] = cell.cycle_variances["unforced"]
+    arrays[f"{prefix}_folded_cycle_mean"] = cell.folded_cycle_mean
+    arrays[f"{prefix}_welch_psd"] = cell.welch_psd
+    arrays[f"{prefix}_segment_counts"] = cell.segment_counts
+    if cell.raw_segments:
+        arrays[f"{prefix}_raw_segment_values"] = cell.raw_segments["values"]
+        arrays[f"{prefix}_raw_segment_times"] = cell.raw_segments["times"]
+    arrays[f"{prefix}_dense_metadata"] = np.asarray(
+        json.dumps(cell.dense_metadata)
+    )
+    record = dict(cell.sampling_metadata or {})
+    for key, value in record.items():
+        if key.startswith("_"):
+            arrays[f"{prefix}{key}"] = np.asarray(value)
+    arrays[f"{prefix}_omega"] = np.asarray(float(record.get("omega", cell.omega)))
+    arrays[f"{prefix}_forcing_phase"] = np.asarray(record["forcing_phase"])
+    arrays[f"{prefix}_discard_time"] = np.asarray(record["discard_time"])
+    arrays[f"{prefix}_n_cycle"] = np.asarray(int(record["n_cycle"]))
+    arrays[f"{prefix}_n_phase"] = np.asarray(int(record["n_phase"]))
+    arrays[f"{prefix}_phase_offset"] = np.asarray(record["phase_offset"])
+    arrays[f"{prefix}_dense_dt"] = np.asarray(record["dense_dt"])
+    return arrays
+
+
 def persist_x_response(output_dir, cells: dict, derived: dict, config: dict, provenance):
     """Persist the x-response pilot artifact contract.
 
@@ -1524,53 +1630,12 @@ def persist_x_response(output_dir, cells: dict, derived: dict, config: dict, pro
     arrays = {}
     sampling_records = {}
     for omega in sorted(cells):
-        cell = cells[omega]
-        study = cell.study
         prefix = f"omega_{frequency_key(omega)}"
-        arrays[f"{prefix}_block_ids"] = np.asarray(study.block_ids, dtype=np.uint32)
-        arrays[f"{prefix}_strengths"] = study.strengths
-        arrays[f"{prefix}_harmonics"] = study.harmonics
-        arrays[f"{prefix}_raw_proposals"] = study.raw_proposals
-        arrays[f"{prefix}_initial_states"] = study.initial_states
-        arrays[f"{prefix}_child_spawn_keys"] = np.asarray(
-            study.child_spawn_keys, dtype=np.uint32
+        cell_arrays = _cell_summary_arrays(cells[omega], prefix)
+        arrays.update(cell_arrays)
+        sampling_records[str(float(omega))] = dict(
+            cells[omega].sampling_metadata or {}
         )
-        positive_mean = study.positive_cycle_fourier.mean(axis=-2)
-        negative_mean = study.negative_cycle_fourier.mean(axis=-2)
-        unforced_mean = study.unforced_cycle_fourier.mean(axis=-2)
-        arrays[f"{prefix}_positive_cycle_mean"] = positive_mean
-        arrays[f"{prefix}_negative_cycle_mean"] = negative_mean
-        arrays[f"{prefix}_unforced_cycle_mean"] = unforced_mean
-        if cell.cycle_variances is not None:
-            arrays[f"{prefix}_positive_cycle_variance"] = cell.cycle_variances["positive"]
-            arrays[f"{prefix}_negative_cycle_variance"] = cell.cycle_variances["negative"]
-            arrays[f"{prefix}_unforced_cycle_variance"] = cell.cycle_variances["unforced"]
-        arrays[f"{prefix}_folded_cycle_mean"] = cell.folded_cycle_mean
-        arrays[f"{prefix}_welch_psd"] = cell.welch_psd
-        arrays[f"{prefix}_segment_counts"] = cell.segment_counts
-        if cell.raw_segments:
-            arrays[f"{prefix}_raw_segment_values"] = cell.raw_segments["values"]
-            arrays[f"{prefix}_raw_segment_times"] = cell.raw_segments["times"]
-        arrays[f"{prefix}_dense_metadata"] = np.asarray(
-            json.dumps(cell.dense_metadata)
-        )
-        record = dict(cell.sampling_metadata or {})
-        sampling_records[str(float(omega))] = record
-        for key, value in record.items():
-            if not key.startswith("_"):
-                continue
-            array_key = f"{prefix}{key}"
-            if key in ("_condition_signs", "_condition_strengths", "_condition_directions"):
-                arrays[array_key] = np.asarray(value)
-            else:
-                arrays[array_key] = np.asarray(value)
-        arrays[f"{prefix}_omega"] = np.asarray(float(omega))
-        arrays[f"{prefix}_forcing_phase"] = np.asarray(record["forcing_phase"])
-        arrays[f"{prefix}_discard_time"] = np.asarray(record["discard_time"])
-        arrays[f"{prefix}_n_cycle"] = np.asarray(int(record["n_cycle"]))
-        arrays[f"{prefix}_n_phase"] = np.asarray(int(record["n_phase"]))
-        arrays[f"{prefix}_phase_offset"] = np.asarray(record["phase_offset"])
-        arrays[f"{prefix}_dense_dt"] = np.asarray(record["dense_dt"])
     write_npz_atomic(raw_path, arrays)
     write_condition_metadata(
         metadata_path,
@@ -1639,31 +1704,136 @@ def persist_x_response(output_dir, cells: dict, derived: dict, config: dict, pro
     return manifest
 
 
-def run_x_response_pilot(config_path):
-    """Run the configured integration, analysis, and persistence workflow."""
+def frequency_chunks_complete(
+    block_level_dir, prefix: str, block_count: int, chunk_blocks: int,
+    block_id_start: int,
+) -> bool:
+    """Technical completeness check for one frequency cell's chunk files.
+
+    Returns true only if every expected chunk file exists, loads, and
+    carries the exact expected block-id range.  Chunk writes are atomic, so
+    existence plus a successful load is the integrity criterion used for
+    resuming.  No scientific quantities are inspected.
+    """
+    directory = Path(block_level_dir)
+    if not directory.is_dir():
+        return False
+    expected = list(chunk_ranges(int(block_count), int(chunk_blocks)))
+    for start, end in expected:
+        path = directory / chunk_file_name(prefix, start, end)
+        if not path.is_file():
+            return False
+        try:
+            with np.load(path, allow_pickle=False) as chunk:
+                if "block_ids" not in chunk.files:
+                    return False
+                identifiers = np.asarray(chunk["block_ids"])
+                expected_ids = np.arange(
+                    int(block_id_start) + start, int(block_id_start) + end,
+                    dtype=np.uint32,
+                )
+                if not np.array_equal(identifiers, expected_ids):
+                    return False
+                if any(
+                    not np.isfinite(np.asarray(chunk[key])).all()
+                    for key in chunk.files
+                    if np.asarray(chunk[key]).dtype.kind in "fc"
+                ):
+                    return False
+        except (OSError, ValueError):
+            return False
+    return True
+
+
+def verify_frequency_chunks(
+    block_level_dir, prefix: str, block_count: int, chunk_blocks: int,
+    block_id_start: int,
+) -> None:
+    """Raise unless the technical completeness check passes."""
+    if not frequency_chunks_complete(
+        block_level_dir, prefix, block_count, chunk_blocks, block_id_start
+    ):
+        raise ValueError(
+            f"chunk integrity check failed for {prefix} in {block_level_dir}"
+        )
+
+
+def run_x_response_pilot(config_path, resume_dir=None):
+    """Run the configured integration, analysis, and persistence workflow.
+
+    With ``resume_dir`` pointing at an existing partially written artifact
+    directory, frequencies whose chunk files already pass the technical
+    completeness check are reused as production data and skipped; the
+    interrupted frequency and all remaining frequencies are integrated
+    normally, and the summary/derived artifacts are rewritten at the end.
+    """
     started = time.perf_counter()
     config_path = Path(config_path).resolve()
     config = json.loads(config_path.read_text(encoding="utf-8"))
     checked = validate_x_response_config(config)
     config_identifier = f"sha256:{file_sha256(config_path)}"
-    output_dir = Path(__file__).resolve().parents[2] / config["output_root"] / (
-        f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}_{config_identifier[7:19]}"
+    if resume_dir is not None and Path(resume_dir).is_dir():
+        output_dir = Path(resume_dir)
+        print(f"[{time.strftime('%H:%M:%S')}] resuming artifact {output_dir}")
+    else:
+        output_dir = Path(__file__).resolve().parents[2] / config["output_root"] / (
+            f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}_{config_identifier[7:19]}"
+        )
+        output_dir.mkdir(parents=True, exist_ok=False)
+        write_json_atomic(output_dir / "config_snapshot.json", config)
+    policy = checked["retention_policy"]
+    block_id_start = int(config["initial_ensemble"]["block_id_start"])
+    checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    blocks = generate_production_blocks(config)
+    print(
+        f"[{time.strftime('%H:%M:%S')}] initial-state blocks generated "
+        f"({len(blocks.block_ids)} blocks)",
+        flush=True,
     )
-    output_dir.mkdir(parents=True, exist_ok=False)
-    write_json_atomic(output_dir / "config_snapshot.json", config)
     cells = {}
     for omega in checked["frequencies"]:
+        prefix = f"omega_{frequency_key(omega)}"
+        chunk_dir = output_dir / BLOCK_LEVEL_DIRECTORY / prefix
+        if resume_dir is not None and frequency_chunks_complete(
+            chunk_dir, prefix, checked["block_count"], policy.chunk_blocks,
+            block_id_start,
+        ):
+            checkpoint_path = checkpoint_dir / f"{prefix}.npz"
+            if not checkpoint_path.is_file():
+                raise ValueError(
+                    f"resume found complete chunks for omega={omega} but no "
+                    f"checkpoint at {checkpoint_path}"
+                )
+            with np.load(checkpoint_path, allow_pickle=False) as checkpoint:
+                cells[omega] = _load_cell(
+                    checkpoint, prefix, omega, config, int(config["n_phase"])
+                )
+            print(
+                f"[{time.strftime('%H:%M:%S')}] omega={omega} chunks already "
+                "complete and verified; reusing production data",
+                flush=True,
+            )
+            continue
         cell = generate_x_response_cell(
             config,
             omega,
             checked["strengths"],
             checked["cycles"][omega],
-            block_level_dir=output_dir / BLOCK_LEVEL_DIRECTORY / frequency_key(omega),
+            block_level_dir=chunk_dir,
+            precomputed_blocks=blocks,
+        )
+        verify_frequency_chunks(
+            chunk_dir, prefix, checked["block_count"], policy.chunk_blocks,
+            block_id_start,
+        )
+        write_npz_atomic(
+            checkpoint_dir / f"{prefix}.npz", _cell_summary_arrays(cell, prefix)
         )
         cells[omega] = cell
         print(
             f"[{time.strftime('%H:%M:%S')}] omega={omega} integrated in "
-            f"{cell.runtime_seconds:.1f}s",
+            f"{cell.runtime_seconds:.1f}s; chunk integrity verified",
             flush=True,
         )
     derived = analyze_x_response(cells, config)
@@ -1675,6 +1845,7 @@ def run_x_response_pilot(config_path):
         "git": git_provenance(Path(__file__).resolve().parents[2]),
         "environment": environment_provenance(),
         "runtime_seconds_before_persistence": time.perf_counter() - started,
+        "resumed_from": str(resume_dir) if resume_dir is not None else None,
     }
     manifest = persist_x_response(output_dir, cells, derived, config, provenance)
     return output_dir, manifest, time.perf_counter() - started

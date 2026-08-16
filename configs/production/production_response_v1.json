@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "study_id": "production_lorenz_response_v1",
+  "classification": "production_lorenz_response_v1",
+  "output_root": "outputs/production/lorenz_response_v1",
+  "runner_path": "experiments/run_x_response_pilot.py",
+  "frequencies": [
+    0.5,
+    0.7,
+    1.0,
+    1.4,
+    2.0,
+    2.8,
+    4.0,
+    4.8,
+    5.6,
+    6.7,
+    8.0,
+    11.3,
+    16.0,
+    22.6
+  ],
+  "strengths": [
+    0.25,
+    0.5,
+    1.0,
+    2.0
+  ],
+  "block_count": 1600,
+  "workers": 8,
+  "discard_time": 160.0,
+  "n_phase": 32,
+  "harmonics": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "observation_rule": {
+    "minimum_cycles": 64,
+    "minimum_physical_time": 400.0
+  },
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-09,
+    "atol": 1e-11
+  },
+  "initial_ensemble": {
+    "root_entropy": 2026081601,
+    "block_id_start": 2500000,
+    "spinup_time": 40.0,
+    "proposal": {
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [
+        0.0,
+        50.0
+      ]
+    }
+  },
+  "protocol": {
+    "status": "production_lorenz_response_v1",
+    "directions": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ],
+      [
+        0.7071067811865475,
+        0.7071067811865475,
+        0.0
+      ],
+      [
+        0.7071067811865475,
+        0.0,
+        0.7071067811865475
+      ],
+      [
+        0.0,
+        0.7071067811865475,
+        0.7071067811865475
+      ]
+    ],
+    "phase": 0.0
+  },
+  "dense": {
+    "dt": 0.05,
+    "n_theta_bins": 256,
+    "welch_segment": 512,
+    "max_psd_bins": 256,
+    "raw_segment_blocks": 2,
+    "raw_segment_samples": 1200,
+    "spectrum_max_omega": null,
+    "spectrum_harmonic_cap": 3.0
+  },
+  "retention": {
+    "per_cycle_fourier_blocks": 256,
+    "phase_samples_blocks": 0,
+    "dense_trajectory_blocks": 0,
+    "block_spectra": true,
+    "chunk_blocks": 32
+  },
+  "bootstrap": {
+    "confidence": 0.95,
+    "resamples": 9999,
+    "root_entropy": 2026081602,
+    "batch_size": 64,
+    "higher_order_fraction_limit": 0.2
+  }
+}

@@ -558,18 +558,32 @@ def dense_trajectory_summary(
 class DenseBlockSpectrum:
     """Complex block-level physical-frequency spectrum of one trajectory.
 
-    ``coefficients`` has axes ``state, frequency_bin``: the segment-averaged
-    complex DFT of the raw dense trajectory,
+    ``coefficients`` has axes ``state, frequency_bin``: the Hann-windowed
+    complex DFT of the complete observation interval on the common
+    fixed-dt grid, referenced to the absolute physical-time origin
+    ``t = 0``,
 
-        S_b(Omega_k) = mean_segments [ sum_t x(t) w(t) exp(-i Omega_k t) ]
-                       / sum_t w(t),
+        S_b(Omega_k) = sum_n w_n x(t_n) exp(-i Omega_k t_n) / sum_n w_n,
 
-    with a Hann window ``w`` of length ``welch_segment``.  ``S_b`` is stored,
-    not ``abs(S_b)`` or ``abs(S_b)**2``, so later analysis can compute both
+    with ``t_n = t0 + n*dt``, ``Omega_k = 2*pi*k / (N*dt)``, and one Hann
+    window ``w`` over the complete retained interval.  This is the
+    continuous display spectrum only: an arbitrary forcing frequency does
+    not in general fall on an FFT bin, so scientific values at
+    ``n*omega`` are the direct known-frequency phase/cycle coefficients,
+    never the nearest bin of this grid.  The single full-interval window
+    shares one common Fourier phase origin, so complex averaging across
+    blocks is meaningful; ``S_b`` is stored, not ``abs(S_b)`` or
+    ``abs(S_b)**2``, so later analysis can compute both
     ``abs(S_b(Omega))`` per block and ``abs(mean_b S_b(Omega))`` after
-    complex averaging across blocks.  ``frequency_grid`` is the explicit
-    angular-frequency grid and is identical for every trajectory of one
-    frequency cell.
+    complex averaging.  ``frequency_grid`` is the explicit angular-frequency
+    grid (complete one-sided range up to ``pi/dt`` by default, or the
+    requested physical ``maximum_omega``) and is identical for every
+    trajectory of one frequency cell.
+    ``segment_count`` is always 1 (one full-interval window); the field is
+    retained for the chunk-file contract.  If a segmented implementation is
+    ever reintroduced for memory reasons, every segment must first be
+    rotated by ``exp(-i Omega_k t_start)`` to the same absolute-time
+    reference before complex averaging.
     """
 
     coefficients: np.ndarray
@@ -584,15 +598,23 @@ class DenseBlockSpectrum:
 def dense_block_spectrum(
     dense_values,
     dense_times,
-    welch_segment: int,
-    max_psd_bins: int,
+    maximum_omega=None,
 ) -> DenseBlockSpectrum:
-    """Compute the complex per-block spectrum of the raw dense trajectory.
+    """Compute the complex per-block display spectrum of the raw trajectory.
 
     The spectrum is taken of the raw trajectory, not of a residual, so the
-    forcing response peak at ``omega`` and its harmonics is present.  Segments
-    are averaged coherently (complex addition) within the block; no averaging
-    across blocks happens here.
+    forcing response peak at ``omega`` and its harmonics is present.  ONE
+    Hann window is applied over the complete observation interval and the
+    FFT is taken on the common fixed-dt grid; there are no short segments.
+    The phase reference is the absolute physical-time origin shared by every
+    block and condition.  No averaging across blocks happens here.
+
+    By default the complete one-sided spectrum is returned, covering the
+    physical range ``0 <= Omega <= pi/dt`` (the Nyquist range); the returned
+    ``frequency_grid`` is authoritative.  An explicit PHYSICAL
+    ``maximum_omega`` selects the bins of the computed grid up to that
+    angular frequency, so the same physical range is requested regardless of
+    observation length; no fixed bin count is used.
     """
     dense_values = np.asarray(dense_values, dtype=float)
     dense_times = np.asarray(dense_times, dtype=float)
@@ -602,35 +624,36 @@ def dense_block_spectrum(
         raise ValueError("dense times must match the time axis")
     if len(dense_times) < 2 or np.any(np.diff(dense_times) <= 0):
         raise ValueError("dense times must be strictly increasing")
-    welch_segment = int(welch_segment)
-    max_psd_bins = int(max_psd_bins)
-    if welch_segment < 16 or max_psd_bins < 8:
-        raise ValueError("dense spectrum settings are too small")
+    if maximum_omega is not None:
+        if not np.isfinite(maximum_omega) or float(maximum_omega) <= 0:
+            raise ValueError("maximum_omega must be a finite positive frequency")
     dt = float(np.median(np.diff(dense_times)))
-    window = np.hanning(welch_segment)
-    total_bins = min(max_psd_bins, welch_segment // 2)
-    accumulated = np.zeros((3, total_bins), dtype=complex)
-    segment_count = 0
-    offset = 0
-    while offset + welch_segment <= dense_values.shape[1]:
-        segment = dense_values[:, offset : offset + welch_segment]
-        accumulated += np.fft.rfft(segment * window[None, :], axis=1)[
-            :, :total_bins
-        ]
-        segment_count += 1
-        offset += welch_segment
-    if segment_count == 0:
-        raise ValueError("dense window is shorter than one spectrum segment")
-    coefficients = accumulated / (segment_count * float(np.sum(window)))
-    frequency_step = 2 * np.pi / (welch_segment * dt)
+    sample_count = dense_values.shape[1]
+    # Periodic Hann over the complete interval: its DFT is exactly zero at
+    # every bin |k| >= 2, so an on-bin sinusoid has no image-bin leakage.
+    window = 0.5 - 0.5 * np.cos(
+        2 * np.pi * (np.arange(sample_count, dtype=float) + 0.5) / sample_count
+    )
+    windowed = dense_values * window[None, :]
+    transform = np.fft.rfft(windowed, axis=1)
+    normalization = float(np.sum(window))
+    frequency_step = 2 * np.pi / (sample_count * dt)
+    grid = frequency_step * np.arange(sample_count // 2 + 1, dtype=float)
+    if maximum_omega is not None:
+        keep = grid <= float(maximum_omega)
+        transform = transform[:, keep]
+        grid = grid[keep]
+    # Rotate from the first-sample origin to the absolute origin t = 0.
+    reference = np.exp(-1j * grid * float(dense_times[0]))
+    coefficients = reference[None, :] * transform / normalization
     return DenseBlockSpectrum(
         coefficients=coefficients,
-        frequency_grid=frequency_step * np.arange(total_bins, dtype=float),
-        segment_count=segment_count,
+        frequency_grid=grid,
+        segment_count=1,
         dense_dt=dt,
         frequency_step=float(frequency_step),
         nyquist=float(np.pi / dt),
-        maximum_frequency=float((total_bins - 1) * frequency_step),
+        maximum_frequency=float(grid[-1]),
     )
 
 
@@ -663,8 +686,7 @@ def _integrate_phase_and_dense(arguments):
     spectrum = dense_block_spectrum(
         dense_values,
         dense_times,
-        dense_config["welch_segment"],
-        dense_config["max_psd_bins"],
+        dense_config.get("spectrum_max_omega"),
     )
     if dense_config.get("retain_dense"):
         dense_retained = (dense_values, dense_times)

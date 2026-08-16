@@ -87,12 +87,24 @@ during integration:
 | dense sample times | `dense_times` | float64 | `(time,)` |
 | `block_ids` | uint32 | `(chunk,)` | chunk membership |
 
-`S_b(Omega_k) = mean_segments [ sum_t x(t) w(t) exp(-i Omega_k t) ] /
-sum_t w(t)` with a Hann window `w`; the spectrum is of the **raw**
-trajectory (the forcing peak is present), is **complex**, is averaged only
-over segments within a block, and is never averaged across blocks before
-persistence. Both `abs(S_b(Omega))` per block and
-`abs(mean_b S_b(Omega))` after complex averaging are computable later.
+`S_b(Omega_k) = sum_n w_n x_b(t_n) exp(-i Omega_k t_n) / sum_n w_n` — ONE
+periodic Hann window over the complete observation interval, one FFT on
+the common fixed-dt grid, referenced to the absolute physical-time origin
+`t = 0` shared by every block and condition (no short segments). By
+default the complete one-sided range `0 <= Omega <= pi/dt` is stored (or
+an explicit physical `maximum_omega` cap via
+`dense.spectrum_max_omega`); the stored frequency grid is authoritative.
+This is the continuous **display** spectrum: an arbitrary forcing frequency
+is not in general on an FFT bin, so scientific values at `n*omega` come
+from the direct known-frequency phase/cycle estimator, never from the
+nearest bin.
+The spectrum is of the **raw** trajectory (the forcing peak is present),
+is **complex**, and is never averaged across blocks before persistence.
+Both `abs(S_b(Omega))` per block and `abs(mean_b S_b(Omega))` after complex
+averaging are computable later. If a segmented implementation is ever
+reintroduced for memory reasons, every segment must first be rotated by
+`exp(-i Omega_k t_start)` to the same absolute-time reference before
+complex averaging.
 
 ### 2.3 Retention policy (explicit configuration)
 

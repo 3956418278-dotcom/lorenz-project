@@ -22,8 +22,16 @@ def main() -> None:
         type=Path,
         default=REPO_ROOT / "configs/exploratory/x_response_dense_v1.json",
     )
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="partially written artifact directory to resume",
+    )
     arguments = parser.parse_args()
-    output_dir, manifest, runtime = run_x_response_pilot(arguments.config)
+    output_dir, manifest, runtime = run_x_response_pilot(
+        arguments.config, resume_dir=arguments.resume
+    )
     print(
         json.dumps(
             {

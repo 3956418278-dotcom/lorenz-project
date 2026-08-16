@@ -109,7 +109,7 @@ def test_chunked_generation_persists_and_reloads_block_level_objects(
             assert chunk["cycle_fourier"].shape[1:] == (5, 2, 3, 6)
             assert chunk["phase_values"].shape[1:] == (5, 2, 16, 3)
             assert chunk["dense_values"].shape[1:] == (5, 3, chunk["dense_times"].shape[0])
-            assert chunk["spectrum"].shape[1:] == (5, 3, 8)
+            assert chunk["spectrum"].shape[1:] == (5, 3, 25)
 
     derived = pilot.analyze_x_response({1.0: cell}, config)
     assert len(derived["frequencies"]) == 1
@@ -136,8 +136,8 @@ def test_chunked_generation_persists_and_reloads_block_level_objects(
     assert reloaded.sampling_metadata["n_cycle"] == 2
     spectra = reloaded.block_spectra
     assert spectra is not None
-    assert spectra["values"].shape == (2, 5, 3, 8)
-    assert spectra["frequency_grid"].shape == (8,)
+    assert spectra["values"].shape == (2, 5, 3, 25)
+    assert spectra["frequency_grid"].shape == (25,)
     retained = reloaded.retained_cycle_fourier
     assert retained["values"].shape == (2, 5, 2, 3, 6)
     np.testing.assert_allclose(
@@ -171,6 +171,48 @@ def test_validate_config_parses_retention_policy():
     assert policy.dense_trajectory_blocks == 2
     assert policy.block_spectra is True
     assert policy.chunk_blocks == 1
+
+
+def test_resume_reuses_completed_frequency_chunks(tmp_path, monkeypatch):
+    """Resuming a partially written artifact skips frequencies whose chunk
+    files already pass the technical completeness check."""
+    config = _config()
+    config["output_root"] = str(tmp_path / "run")
+    monkeypatch.setattr(
+        pilot, "generate_initial_state_blocks",
+        lambda *args, **kwargs: _fake_blocks(config),
+    )
+    output_dir, manifest, _ = pilot.run_x_response_pilot(
+        _write_config(tmp_path, config), resume_dir=None
+    )
+    first_chunks = sorted(
+        (output_dir / "block_level" / "omega_1").glob("*.npz")
+    )
+    assert len(first_chunks) == 2
+    hashes_before = [pilot.file_sha256(path) for path in first_chunks]
+    # Resume: the single frequency is complete, so integration is skipped
+    # and the same chunk files are reused byte-for-byte.
+    output_dir, manifest, _ = pilot.run_x_response_pilot(
+        _write_config(tmp_path, config), resume_dir=output_dir
+    )
+    hashes_after = [pilot.file_sha256(path) for path in first_chunks]
+    assert hashes_after == hashes_before
+    assert manifest["schema_version"] == 2
+    # An incomplete chunk set (or a wrong block-id base) fails the check.
+    assert not pilot.frequency_chunks_complete(
+        output_dir / "block_level" / "omega_1", "omega_1", 2, 1, 6000
+    )
+    assert not pilot.frequency_chunks_complete(
+        output_dir / "block_level" / "omega_1", "omega_1", 3, 1, 5000
+    )
+
+
+def _write_config(tmp_path, config):
+    import json as _json
+
+    path = tmp_path / "config.json"
+    path.write_text(_json.dumps(config), encoding="utf-8")
+    return path
 
 
 def test_merge_cell_merges_spectra_along_the_condition_axis():

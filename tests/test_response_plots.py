@@ -32,6 +32,11 @@ def test_block_spectra_requires_complex_for_coherent_mean():
     assert figure is not None
 
 
+def _separate_uncertainty(rng, shape):
+    """A (real, imaginary) uncertainty pair with distinct values."""
+    return np.abs(rng.normal(size=shape)), np.abs(rng.normal(size=shape))
+
+
 def test_figure_functions_render_and_save(tmp_path):
     rng = np.random.default_rng(7)
     grid = np.arange(64, dtype=float)
@@ -51,19 +56,20 @@ def test_figure_functions_render_and_save(tmp_path):
 
     frequencies = np.asarray([0.5, 1.0, 2.0, 4.0])
     values = rng.normal(size=(4, 2)) + 1j * rng.normal(size=(4, 2))
-    uncertainty = np.abs(rng.normal(size=(4, 2)))
+    uncertainty = _separate_uncertainty(rng, (4, 2))
     figure = figure_frequency_response(
         frequencies, values, uncertainty, entry_labels=["entry a", "entry b"],
     )
     save_figure(figure, tmp_path, "test_frequency")
 
-    strengths = np.asarray([0.25, 0.5, 1.0, 2.0])
     figure = figure_strength_dependence(
-        strengths,
-        rng.normal(size=(2, 4)) + 1j * rng.normal(size=(2, 4)),
-        np.abs(rng.normal(size=(2, 4))),
-        rng.normal(size=(2, 4)) + 1j * rng.normal(size=(2, 4)),
-        np.abs(rng.normal(size=(2, 4))),
+        [np.asarray([0.25, 0.5, 1.0, 2.0]), np.asarray([0.5, 1.0, 2.0])],
+        [rng.normal(size=(4,)) + 1j * rng.normal(size=(4,)),
+         rng.normal(size=(3,)) + 1j * rng.normal(size=(3,))],
+        [_separate_uncertainty(rng, (4,)), _separate_uncertainty(rng, (3,))],
+        [rng.normal(size=(4,)) + 1j * rng.normal(size=(4,)),
+         rng.normal(size=(3,)) + 1j * rng.normal(size=(3,))],
+        [_separate_uncertainty(rng, (4,)), _separate_uncertainty(rng, (3,))],
         frequency_labels=["0.5", "8.0"],
     )
     save_figure(figure, tmp_path, "test_strength")
@@ -73,12 +79,12 @@ def test_figure_functions_render_and_save(tmp_path):
             {
                 "harmonics": np.asarray([1.0, 3.0]),
                 "point": np.asarray([1 + 2j, 0.1 + 0.2j]),
-                "uncertainty": np.asarray([0.1, 0.3]),
+                "uncertainty": _separate_uncertainty(rng, (2,)),
                 "label": "odd",
             },
         ],
-        per_cycle=rng.normal(size=(30, 2)) + 1j * rng.normal(size=(30, 2)),
-        per_cycle_harmonic=1.0,
+        block_values=rng.normal(size=(30, 2)) + 1j * rng.normal(size=(30, 2)),
+        block_values_harmonic=1.0,
     )
     save_figure(figure, tmp_path, "test_harmonics")
 
@@ -89,20 +95,41 @@ def test_figure_functions_render_and_save(tmp_path):
     assert (tmp_path / "test_harmonics.png").is_file()
 
 
+def test_raw_trajectory_plotting_accepts_arbitrary_block_counts(tmp_path):
+    """Fig 2 must work unchanged for B=2 and B=1024 populations."""
+    rng = np.random.default_rng(11)
+    times = np.arange(120, dtype=float)
+    for block_count in (1, 2, 64, 1024):
+        values = rng.normal(size=(2, block_count, 120))
+        figure = figure_raw_trajectories(
+            values, times, panel_labels=["a", "b"],
+            max_traces=None if block_count <= 64 else 128,
+        )
+        save_figure(figure, tmp_path, f"raw_b{block_count}")
+        assert (tmp_path / f"raw_b{block_count}.png").is_file()
+
+
 def test_shape_validation():
     with pytest.raises(ValueError):
         figure_frequency_response(
             np.asarray([1.0, 2.0]),
             np.ones((3, 1), dtype=complex),
-            np.ones((3, 1)),
+            (np.ones((3, 1)), np.ones((3, 1))),
+        )
+    # mismatched uncertainty part shape is rejected
+    with pytest.raises(ValueError):
+        figure_frequency_response(
+            np.asarray([1.0, 2.0]),
+            np.ones((2, 1), dtype=complex),
+            (np.ones((2, 1)), np.ones((3, 1))),
         )
     with pytest.raises(ValueError):
         figure_strength_dependence(
-            np.asarray([1.0]),
-            np.ones((2, 1), dtype=complex),
-            np.ones((2, 1)),
-            np.ones((1, 1), dtype=complex),
-            np.ones((1, 1)),
+            [np.asarray([1.0])],
+            [np.ones((2,), dtype=complex)],
+            [(np.ones((2,)), np.ones((2,)))],
+            [np.ones((1,), dtype=complex)],
+            [(np.ones((1,)), np.ones((1,)))],
             frequency_labels=["0.5"],
         )
     with pytest.raises(ValueError):

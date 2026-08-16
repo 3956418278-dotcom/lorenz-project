@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 import lorenz.strength_study as strength_study
 from lorenz.strength_study import (
@@ -91,36 +92,94 @@ def test_explicit_components_keep_a2_u2_and_dc_semantics_separate():
     np.testing.assert_allclose(dc["current_E0"], 4)
 
 
-def test_dense_block_spectrum_recovers_a_sinusoid_amplitude():
+def test_dense_block_spectrum_hann_full_window_peak_and_phase():
+    """The full-window Hann spectrum must report the correct peak frequency
+    and the complex phase referenced to the absolute time origin t=0.
+
+    For a sinusoid exactly on a bin k >= 2 of the full-interval grid, the
+    Hann window has zero response at the 2*k image bin, so
+    S_b(Omega_k) = (A/2) exp(i*phase) exactly (up to roundoff), with the
+    phase measured at t = 0.
+    """
     from lorenz.strength_study import dense_block_spectrum
 
     dt = 0.1
     count = 1024
-    times = dt * np.arange(count, dtype=float)
-    frequency_step = 2 * np.pi / (512 * dt)
-    omega0 = 5 * frequency_step  # exactly on a frequency bin
+    discard = 160.0  # nonzero absolute-time origin exercises the rotation
+    times = discard + dt * np.arange(count, dtype=float)
+    full_step = 2 * np.pi / (count * dt)
+    peak_bin = 10
+    omega0 = peak_bin * full_step
+    amplitude = 3.0
+    phase = 0.7
     values = np.stack(
         [
-            3.0 * np.cos(omega0 * times),
-            2.0 * np.cos(2 * omega0 * times),
-            0.5 * np.ones(count),
+            amplitude * np.cos(omega0 * times + phase),
+            amplitude * np.sin(omega0 * times + phase),
+            np.zeros(count),
         ]
     )
-    spectrum = dense_block_spectrum(values, times, 512, 256)
-    assert spectrum.coefficients.shape == (3, 256)
-    assert spectrum.segment_count == 2
-    # The Hann window leaks the 2*Omega0 image by O(1e-5), hence the
-    # tolerance: |S_b(Omega0)| = A/2 exactly only for a rectangular window.
+    spectrum = dense_block_spectrum(values, times)
+    # Correct peak frequency: the largest coefficient sits at omega0.
+    assert int(np.argmax(np.abs(spectrum.coefficients[0]))) == peak_bin
+    # Correct complex phase and amplitude: S_b(omega0) = (A/2) exp(i*phase).
+    # Exact for the periodic Hann (zero image-bin leakage); tolerance is
+    # float64 roundoff of the 1024-point FFT and the t0 = 160 rotation.
     np.testing.assert_allclose(
-        np.abs(spectrum.coefficients[0, 5]), 3.0 / 2, rtol=1e-4
+        spectrum.coefficients[0, peak_bin],
+        amplitude / 2 * np.exp(1j * phase),
+        rtol=1e-10, atol=1e-10,
     )
     np.testing.assert_allclose(
-        np.abs(spectrum.coefficients[1, 10]), 2.0 / 2, rtol=1e-4
+        spectrum.coefficients[1, peak_bin],
+        amplitude / 2 * np.exp(1j * (phase - np.pi / 2)),
+        rtol=1e-10, atol=1e-10,
     )
-    np.testing.assert_allclose(spectrum.coefficients[2, 0], 0.5, rtol=1e-6)
+    assert spectrum.segment_count == 1
+    # Complete one-sided spectrum by default: the grid reaches the Nyquist
+    # frequency and is authoritative.
     np.testing.assert_allclose(
-        spectrum.frequency_grid, frequency_step * np.arange(256)
+        spectrum.frequency_grid[-1], np.pi / dt, rtol=1e-12
     )
+    np.testing.assert_allclose(
+        spectrum.frequency_grid, full_step * np.arange(count // 2 + 1)
+    )
+
+
+def test_dense_block_spectrum_physical_range_follows_dt_and_length():
+    """The spectrum range is a physical frequency, not a fixed bin count.
+
+    The default covers the complete one-sided range up to pi/dt regardless
+    of observation length; an explicit maximum_omega selects the bins of the
+    computed grid up to that physical frequency.
+    """
+    from lorenz.strength_study import dense_block_spectrum
+
+    dt = 0.1
+    rng = np.random.default_rng(3)
+    results = {}
+    for count in (512, 1024):
+        times = 10.0 + dt * np.arange(count, dtype=float)
+        values = rng.normal(size=(3, count))
+        spectrum = dense_block_spectrum(values, times)
+        results[count] = spectrum
+        # Full range by default, at the Nyquist frequency pi/dt.
+        np.testing.assert_allclose(
+            spectrum.frequency_grid[-1], np.pi / dt, rtol=1e-12
+        )
+        assert spectrum.coefficients.shape[1] == count // 2 + 1
+    # Same physical range for both lengths, different bin counts.
+    assert (
+        results[512].frequency_grid[-1] == results[1024].frequency_grid[-1]
+    )
+    assert results[512].frequency_grid.shape[0] < results[1024].frequency_grid.shape[0]
+    # An explicit PHYSICAL maximum selects bins on the computed grid.
+    capped = dense_block_spectrum(values, times, maximum_omega=2.5)
+    assert capped.frequency_grid[-1] <= 2.5
+    assert capped.frequency_grid.shape[0] == int(2.5 / (2 * np.pi / (1024 * dt))) + 1
+    assert np.array_equal(capped.frequency_grid, results[1024].frequency_grid[: len(capped.frequency_grid)])
+    with pytest.raises(ValueError):
+        dense_block_spectrum(values, times, maximum_omega=-1.0)
 
 
 def test_frequency_container_preserves_crossed_blocks_and_stable_keys():
