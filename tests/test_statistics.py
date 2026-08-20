@@ -1,10 +1,16 @@
 import numpy as np
 import pytest
 
-from lorenz.response import reconstruct_linear_tensor, reconstruct_monochromatic_quadratic_tensor
+from lorenz.response import (
+    phase_fourier,
+    reconstruct_linear_tensor,
+    reconstruct_monochromatic_quadratic_tensor,
+)
 from lorenz.statistics import (
     BlockFourierContrasts,
     BlockFrequencyResponses,
+    cos_sin_components,
+    cos_sin_statistics,
     finite_strength_block_responses,
     paired_block_fourier_contrasts,
     realify_block_values,
@@ -202,3 +208,47 @@ def test_block_adapter_matches_explicit_cycle_means_and_preserves_axes():
         actual.even_second_harmonic, expected.even_second_harmonic
     )
     np.testing.assert_allclose(actual.even_dc, expected.even_dc)
+
+
+def test_fourier_convention_maps_cos_to_real_and_sin_to_negative_imag():
+    """The e^{-i n theta} convention: a pure cosine coefficient is real,
+    a pure sine coefficient is negative-imaginary.  Verified directly, not
+    assumed from names."""
+    n_phase = 64
+    theta = 2 * np.pi * np.arange(n_phase) / n_phase
+    coefficient_cos = phase_fourier(np.cos(theta), [1])[0]
+    coefficient_sin = phase_fourier(np.sin(theta), [1])[0]
+    np.testing.assert_allclose(coefficient_cos, 0.5, atol=1e-12)
+    np.testing.assert_allclose(coefficient_sin, -0.5j, atol=1e-12)
+    # component mapping: cos component = Re, sin component = -Im
+    cos_part, sin_part = cos_sin_components(np.asarray([0.5 - 0.25j]))
+    np.testing.assert_allclose(cos_part, [0.5])
+    np.testing.assert_allclose(sin_part, [0.25])
+
+
+def test_cos_sin_statistics_joint_test_and_components():
+    rng = np.random.default_rng(4)
+    # blocks drawn around a true coefficient c = 0.3 - 0.2j, i.e.
+    # (cos, sin) = (Re, -Im) = (0.3, +0.2)
+    values = (0.3 + rng.normal(0, 0.1, 200)) + 1j * (-0.2 + rng.normal(0, 0.1, 200))
+    result = cos_sin_statistics(values, confidence=0.95)
+    np.testing.assert_allclose(result.mean_cos, 0.3, atol=0.02)
+    np.testing.assert_allclose(result.mean_sin, 0.2, atol=0.02)
+    assert result.ci_cos[0] < result.mean_cos < result.ci_cos[1]
+    assert result.ci_sin[0] < result.mean_sin < result.ci_sin[1]
+    assert result.hotelling_p_value < 1e-6  # clearly separated from origin
+    assert not result.used_pseudoinverse
+    np.testing.assert_allclose(
+        result.magnitude, np.hypot(result.mean_cos, result.mean_sin)
+    )
+    # noise-only blocks: the joint test does not reject
+    noise = rng.normal(0, 0.1, 200) + 1j * rng.normal(0, 0.1, 200)
+    noise_result = cos_sin_statistics(noise)
+    assert noise_result.hotelling_p_value > 0.05
+
+
+def test_cos_sin_statistics_rejects_non_scalar_or_short_inputs():
+    with pytest.raises(ValueError):
+        cos_sin_statistics(np.ones((4, 2), dtype=complex))
+    with pytest.raises(ValueError):
+        cos_sin_statistics(np.ones(2, dtype=complex))

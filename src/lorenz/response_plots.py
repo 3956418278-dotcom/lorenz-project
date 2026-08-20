@@ -145,6 +145,32 @@ def statistical_snr(values):
     return float(np.sqrt(max(score, 0.0))), used_pseudoinverse
 
 
+def ensemble_noise_floor(spectra, *, resamples=2000, seed=2026081601):
+    """Ensemble-mean chaotic noise floor of per-block complex spectra.
+
+    ``spectra`` has axes ``(block, frequency_bin)`` and holds the complex
+    per-block unforced (fluctuation) spectra.  The noise floor of the
+    ensemble mean is computed directly at block level by resampling whole
+    blocks: the returned curves are the median and the central 95% band of
+    ``|mean of the resampled blocks' S_b(Omega)|``.  This is the proper
+    comparison object for the coherent forced mean ``|mean_b S_b|``; a
+    simple ``sigma / sqrt(B)`` may be used as a sanity check but is not
+    this estimator.  The single-block chaotic spectrum level is a different
+    object and must be displayed separately.
+    """
+    spectra = np.asarray(spectra)
+    if spectra.ndim != 2 or not np.iscomplexobj(spectra):
+        raise ValueError("spectra must have axes (block, frequency_bin)")
+    rng = np.random.default_rng(seed)
+    resampled = np.empty((resamples, spectra.shape[1]))
+    for index in range(resamples):
+        draw = rng.integers(0, len(spectra), len(spectra))
+        resampled[index] = np.abs(spectra[draw].mean(axis=0))
+    median = np.median(resampled, axis=0)
+    lower, upper = np.quantile(resampled, (0.025, 0.975), axis=0)
+    return median, lower, upper
+
+
 # ---------------------------------------------------------------------------
 # figure 1 - individual block spectra and the coherent ensemble mean
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from lorenz.response_plots import (
+    ensemble_noise_floor,
     figure_block_spectra,
     figure_frequency_response,
     figure_harmonic_content,
@@ -136,3 +137,37 @@ def test_shape_validation():
         figure_harmonic_content([])
     with pytest.raises(ValueError):
         mean_and_standard_error(np.ones(1))
+
+
+def test_ensemble_noise_floor_is_block_level_and_separate_from_single_block_level():
+    rng = np.random.default_rng(9)
+    spectra = rng.normal(size=(400, 32)) + 1j * rng.normal(size=(400, 32))
+    median, lower, upper = ensemble_noise_floor(spectra, resamples=300, seed=3)
+    # the noise floor of the ensemble mean is far below the single-block level
+    single_block = np.abs(spectra).mean()
+    assert float(np.median(median)) < 0.2 * single_block
+    assert np.all(lower <= median) and np.all(median <= upper)
+    with pytest.raises(ValueError):
+        ensemble_noise_floor(np.abs(spectra))
+
+
+def test_fluctuation_spectrum_removes_the_time_mean_peak():
+    from lorenz.strength_study import dense_block_spectrum
+
+    dt = 0.1
+    count = 1024
+    times = 5.0 + dt * np.arange(count, dtype=float)
+    values = np.stack(
+        [
+            0.3 * np.cos(2 * np.pi * 3 / (count * dt) * times),  # zero mean
+            0.4 * np.sin(2 * np.pi * 5 / (count * dt) * times),  # zero mean
+            7.5 + 0.2 * np.cos(2 * np.pi * 2 / (count * dt) * times),  # large mean
+        ]
+    )
+    spectrum = dense_block_spectrum(values, times)
+    # the z state (third row) has a large time mean: its Omega=0 bin must
+    # not show it after fluctuation removal
+    assert abs(spectrum.coefficients[2, 0]) < 1e-9
+    # the sinusoid peaks survive
+    assert abs(spectrum.coefficients[0, 3]) > 0.1
+    assert abs(spectrum.coefficients[1, 5]) > 0.1

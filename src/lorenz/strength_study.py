@@ -602,12 +602,15 @@ def dense_block_spectrum(
 ) -> DenseBlockSpectrum:
     """Compute the complex per-block display spectrum of the raw trajectory.
 
-    The spectrum is taken of the raw trajectory, not of a residual, so the
-    forcing response peak at ``omega`` and its harmonics is present.  ONE
-    Hann window is applied over the complete observation interval and the
-    FFT is taken on the common fixed-dt grid; there are no short segments.
-    The phase reference is the absolute physical-time origin shared by every
-    block and condition.  No averaging across blocks happens here.
+    The spectrum is the fluctuation spectrum of the trajectory: each
+    state's time mean is removed before windowing (display/background
+    object only; the harmonic estimator and DC response are unaffected),
+    so the forcing response peak at ``omega`` and its harmonics is present
+    but a nonzero time mean produces no Omega=0 peak.  ONE Hann window is
+    applied over the complete observation interval and the FFT is taken on
+    the common fixed-dt grid; there are no short segments.  The phase
+    reference is the absolute physical-time origin shared by every block
+    and condition.  No averaging across blocks happens here.
 
     By default the complete one-sided spectrum is returned, covering the
     physical range ``0 <= Omega <= pi/dt`` (the Nyquist range); the returned
@@ -629,6 +632,11 @@ def dense_block_spectrum(
             raise ValueError("maximum_omega must be a finite positive frequency")
     dt = float(np.median(np.diff(dense_times)))
     sample_count = dense_values.shape[1]
+    # Fluctuation spectrum (display/background object only): remove each
+    # state's time mean before windowing so a nonzero time mean (e.g. z's
+    # DC offset) cannot produce a large Omega=0 peak.  This does NOT touch
+    # the DC response, Qdc, raw trajectories, or the harmonic estimator.
+    dense_values = dense_values - dense_values.mean(axis=1, keepdims=True)
     # Periodic Hann over the complete interval: its DFT is exactly zero at
     # every bin |k| >= 2, so an on-bin sinusoid has no image-bin leakage.
     window = 0.5 - 0.5 * np.cos(
