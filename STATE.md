@@ -123,8 +123,63 @@
   the working second-harmonic estimator. The current reconnaissance runner has
   not been executed.
 - Analytic synthetic-signal verification of Fourier signs, factors, complex
-  susceptibility recovery, and direction reconstruction. Current active test
-  result: `99 passed`.
+  susceptibility recovery, and direction reconstruction. The seven targeted
+  high-order probe checks pass in the current numerical environment.
+
+- The production high-order probe supports six forcing directions, arbitrary
+  strength counts, retained block-level complex spectra, signed cos/sin
+  Hotelling tests, multiplicity-aware BH q-values, resumable chunked execution,
+  and immutable extension artifacts. Extension runs merge new strengths onto a
+  canonical condition axis and require an exact redundant-unforced check against
+  their base artifact before inference.
+- Figure-A-style diagnostics are generated as one three-panel `x | y | z`
+  figure per direction and strength. They show the coherent odd/even spectra,
+  whole-block-resampled ensemble noise, single-block chaotic-background bands,
+  harmonic guides, and exact known-frequency responses from `condition_means`.
+
+## High-Order Signal-Discovery Results
+
+Two completed `B=256` probes cover six forcing directions, outputs `(x,y,z)`,
+harmonics `n=0..5`, and strengths `{2,4,8,10,12,14,16}` at `omega=6.7` and
+`omega=5.938`. Detection uses the joint signed cos/sin Hotelling statistic with
+BH `q<=0.05` over a separate 630-cell non-DC family at each frequency. These are
+large-amplitude signal-discovery probes; especially `h>=8` is not interpreted
+as a perturbative tensor estimate.
+
+- At `omega=6.7`, harmonics `n=1,2,3,4,5` are all detected somewhere in the
+  family, with respectively `91,59,45,15,22` detected cells. Both `n=4` and
+  `n=5` are present across multiple cells by `h=12`; isolated lower-strength
+  detections and nonmonotone counts mean that no sharp monotone onset is
+  claimed.
+- At `omega=5.938`, harmonics `n=1,2,3,4,5` are all detected somewhere, with
+  respectively `92,49,46,3,8` detected cells. `n=4` is first established at
+  `h=14`; `n=5` has detections from `h=10`, and both are detected at `h=14` and
+  `h=16`.
+- The strongest `n=4` and `n=5` responses remain below the median amplitude of
+  a single unforced block at their harmonic frequencies: response/background
+  ratios are about `0.395/0.247` at `omega=6.7` and `0.329/0.194` at
+  `omega=5.938`. Their detection comes from coherent paired ensemble response,
+  not from exceeding the fluctuations of an individual chaotic block.
+- The redundant unforced extension condition matches its immutable base
+  exactly in all eight chunks for `condition_means`, retained cycle Fourier
+  coefficients, dense complex spectra, and spectrum segment counts at both
+  frequencies.
+
+Canonical artifacts:
+
+- `outputs/production/high_order_probe_omega_6p7_h10_h12_h14_h16_extension_v1/20260822T061155_75ca70131a4b/`
+- `outputs/production/high_order_probe_omega_5p938_h10_h12_h14_h16_extension_v1/20260822T061155_b1e645f07e98/`
+
+Each artifact contains the 630-cell numerical/significance summaries and core
+figures. Its post-run `figure_A_by_direction_strength/` view contains 42 PNGs
+(six directions by seven strengths); these presentation files were generated
+after the immutable simulation manifest.
+
+Established next issue: the probes show that fourth- and fifth-harmonic signals
+can be resolved at sufficiently large forcing, but they do not establish a
+small-amplitude scaling regime or perturbative coefficients. Any tensor study
+must separately test amplitude scaling and numerical/statistical adequacy at
+smaller strengths.
 
 ## Not Yet Confirmed
 
@@ -133,12 +188,15 @@
   including the uncertainty estimator appropriate to deterministic chaotic
   divergence and within-trajectory dependence.
 - Frequency domain and sampling scheme, forcing directions, strength range,
-  phase resolution, cycle counts, and independent sample counts.
+  phase resolution, cycle counts, and independent sample counts for the final
+  perturbative tensor experiment. The completed probe settings are confirmed
+  only for large-amplitude signal discovery.
 - Operational criteria for a usable zero-strength limit, response
   distinguishability, convergence, multiplicity across frequencies/tensor
   components, and evidence strength for final conclusions.
-- Persistent experiment configuration, raw/derived result schemas, and runtime
-  strategy for formal experiments.
+- The high-order probe has persistent configuration and raw/derived schemas;
+  their suitability and runtime strategy for the final perturbative tensor
+  experiment are not yet confirmed.
 
 ## Current Blocker
 
@@ -217,21 +275,17 @@ not exist under the provisional rule; second order is bounded but not
 measured; the DC common high-precision `mu0` baseline remains deferred; the
 Welch background is validated only as a descriptive scale.
 
-Next decision: with x-forcing alone resolving only two of five linear and one
-of eight quadratic entries, choose between the deferred six-direction
-extension (now budgetable against a stated bound-level quadratic target) or
-increasing B/observation for the x-only second order. Awaiting approval
-before any further experiment.
+The six-direction high-order signal-discovery extension is now complete at two
+frequencies. It establishes visibility of `n=1..5` at large amplitude but does
+not resolve the earlier perturbative-identification problem. The next decision
+is an amplitude-scaling design that tests where the resolved signals cease to
+be distinguishable and whether a defensible small-amplitude regime exists.
 
-Before the next production experiment is designed, the retention level
-(dense trajectories, phase samples, per-cycle Fourier, spectra) is chosen
-from the storage-scaling report (`python -m lorenz.storage_scale`); no
-retention level is hard-coded. The complete noise-versus-response figure
-(per-block |S_b| cloud + coherent |mean_b S_b| + its uncertainty) requires
-the production retained spectrum object; the executed artifacts retain only
-per-block real Welch PSDs of the residual, so the current reconstruction is
-limited to the per-block fluctuation spectra (see
-`outputs/figures/x_response_block_level/notes.md`).
+The completed high-order artifacts retain per-block continuous complex spectra,
+so the full noise-versus-response comparison is now available for those probe
+settings. Retention for a future perturbative production design must still be
+chosen explicitly from the storage-scaling report rather than inherited
+automatically.
 
 ## Delegated Design Conclusions
 
@@ -337,9 +391,11 @@ limited to the per-block fluctuation spectra (see
   in their respective repository partitions.
 - Existing modifications under `reference/matlab_ssm/` predate current work and
   are not part of active changes.
-- The usable environment is currently
-  `/home/feng/miniforge3/envs/ml/bin/python`; the default `python` lacks NumPy
-  and SciPy, and dependency versions are not locked.
+- The usable Linux numerical environment for the probe is currently
+  `/home/feng/miniforge3/envs/ody/bin/python` (NumPy 2.4.3, SciPy 1.15.2).
+  It lacks pytest; the base environment has pytest but no NumPy, while the
+  `ml` environment has an incompatible SciPy build. Targeted probe checks were
+  therefore invoked directly in `ody`; dependency versions are not locked.
 - This retention/visualization work ran on the Windows machine's Python
   3.14.3 (`E:\Downloads\py\python.exe`, numpy 2.4.3, scipy 1.17.1, matplotlib
   3.10.8, pytest installed locally; run tests with `PYTHONPATH=src python -m
