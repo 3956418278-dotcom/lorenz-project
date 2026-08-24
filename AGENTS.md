@@ -68,7 +68,8 @@ Avoid replacing a difficult part of the actual problem with a toy substitute sim
 Prefer one coherent path that works for the real project over several partial or overlapping paths.
 
 ---
-### Make analysis useful for human decisions
+
+## Make analysis useful for human decisions
 
 For analysis, diagnostics, visualization, and presentation work, organize the
 output around the scientific or project decision a person needs to make.
@@ -95,6 +96,8 @@ Distinguish carefully between "not established", "inconsistent with", and
 bound is violated. Never strengthen a scientific claim merely to make a result,
 diagnostic, or figure more decisive.
 
+---
+
 ## Read context with a purpose
 
 Use the context needed to make the current decision well.
@@ -120,32 +123,42 @@ The goal is sufficient context for good decisions, not the smallest possible rea
 
 Organize code around stable concepts and keep variation with the component that owns it.
 
-Put values that vary between runs — parameters, paths, datasets, model instances,
-runtime profiles, experiment settings — in configuration or data rather than
-duplicating code.
+Let the project structure grow with durable capabilities rather than with the
+number of tasks that have been performed.
+
+Put values and choices that vary between instances in configuration, data,
+arguments, or other forms that naturally represent variation rather than
+duplicating implementation.
 
 Before adding a new implementation, ask:
 
 > Is this a new capability, or just another value, instance, or dimension of an existing one?
 
-If it is the same kind of thing, reuse the existing integration, sampling,
-statistics, persistence, and runtime machinery. Add only the logic that is
-genuinely new.
+If it is the same kind of thing, extend the existing concept and reuse the
+mechanisms it already owns. Add only the logic that is genuinely new.
 
 Use this change test:
 
 > If another instance of the same kind were added tomorrow, which code would change?
 
 The answer should normally be the owning configuration, adapter, or local
-variation logic, not unrelated core code.
+variation logic, not unrelated parts of the system.
 
-Do not abstract hypothetical future needs. But once real implementations start
-copying substantial mechanisms or importing several private helpers from one
-another, consolidate the shared ownership before adding another copy.
+Give shared mechanisms a clear owner. When several parts of the project begin
+depending on a local implementation, copying the same mechanism, or reaching
+across boundaries through private details, repair the ownership boundary rather
+than normalizing the dependency.
 
-Keep the active repository focused on current capabilities. Once one-off
-exploratory code has served its decision and is recoverable from committed
-history and artifacts, remove it when nothing active depends on it.
+Do not abstract hypothetical future needs. Consolidate structure when actual
+use shows that a capability has become shared.
+
+Keep exploratory and task-local work lightweight. Promote it into the durable
+project structure when it becomes a real project capability, and remove it when
+its purpose has passed and its result is preserved elsewhere.
+
+After changing the repository, leave its state legible. Permanent additions
+should have a clear purpose, temporary work should not accumulate unnoticed,
+and unrelated existing work should remain intact.
 
 Local complexity is acceptable when the problem requires it; do not let it
 propagate through the system.
@@ -157,50 +170,53 @@ propagate through the system.
 Treat the main context as project working memory.
 
 Keep in it the information that affects future decisions:
+
 - project goals and confirmed definitions;
 - current capabilities and blockers;
 - cross-cutting constraints;
 - accepted conclusions and their limitations;
 - decisions that require the user's judgment.
 
-When the runtime supports delegation, prefer a separate agent context for work
-whose execution requires much more detail than the main project will need afterward.
+Use a separate context when solving a task requires substantially more local
+detail than the main project should retain after the result is known.
 
 Typical examples include:
+
 - deep code or repository investigation;
 - long mathematical derivations;
 - reference or literature analysis;
-- experimental runs and parameter comparisons;
+- experimental or computational work;
 - log-heavy debugging;
 - independent verification of a local conclusion.
 
-The important question is not whether the task is large:
+The important question is:
 
 > Will solving this require substantially more local detail than the main context
 > should retain after the answer is known?
 
-If yes, delegate it when practical.
+When work is delegated, delegate responsibility for a result rather than a
+sequence of steps.
 
-A delegated task should receive the confirmed context it needs and return:
-- the conclusion;
-- supporting evidence;
-- assumptions and limitations;
-- project impact;
-- unresolved questions that matter to the parent task.
+The delegated context receives the confirmed context, objective, constraints,
+and boundaries it needs. It owns the detailed investigation and execution
+required to reach the requested result.
 
-Keep detailed exploration, logs, intermediate calculations, and local implementation
-history in the delegated context or project artifacts. Retrieve them again only when needed.
+It should return when:
 
-Delegation isolates working context, not repository ownership.
+- the result is ready for synthesis; or
+- a decision or blocker requires information outside the delegated scope.
 
-When delegated work changes the repository, integrate it through the existing
-ownership boundaries. A sub-agent should not create a parallel implementation
-of mechanisms the project already owns merely to make its local task self-contained.
+Routine progress, intermediate attempts, local execution details, and working
+history stay in the delegated context or project artifacts unless they
+materially change the project-level understanding.
 
-The parent agent is responsible for recognizing overlap between delegated work
-and existing project mechanisms before accepting new repository structure.
+The parent context remains responsible for decomposition, coordination,
+cross-task decisions, synthesis, and accepting changes into the project.
 
-The parent agent owns decomposition, synthesis, project-level decisions, and coordination.
+Delegation isolates working context, not repository ownership. Delegated work
+should follow the same project boundaries and reuse the same existing
+capabilities as work performed in the main context.
+
 The user should not need to create the agent structure or relay messages between agents.
 
 ---
