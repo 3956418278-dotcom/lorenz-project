@@ -1,7 +1,7 @@
-"""High-order probe: one frequency, six forcing directions, shared unforced.
+"""One-frequency harmonic probe with paired forcing directions and shared unforced.
 
 Goal of the probe (NOT a perturbative-tensor measurement): probe the 1..5
-omega response across the full second-order direction design and identify
+omega response across a configured direction design and identify
 which (direction, output, harmonic) cells show a reliable signed response.
 The unforced trajectory is integrated once per block and shared by every
 direction and strength.  An optional extension mode can reuse a completed
@@ -91,8 +91,8 @@ def validate_probe_config(config: dict) -> dict:
     if isinstance(block_count, bool) or block_count < 3:
         raise ValueError("block_count must be at least three")
     directions = [np.asarray(value, dtype=float) for value in config["protocol"]["directions"]]
-    if len(directions) != 6:
-        raise ValueError("the probe requires exactly six forcing directions")
+    if not directions:
+        raise ValueError("the probe requires at least one forcing direction")
     for direction in directions:
         if direction.shape != (3,) or not np.isfinite(direction).all() or not np.any(direction):
             raise ValueError("each direction must be a finite nonzero vector")
@@ -300,7 +300,7 @@ def generate_probe_cell(config, checked, blocks, output_dir, policy) -> dict:
 
 
 def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> dict:
-    """Integrate one frequency cell with six directions and one shared
+    """Integrate one frequency cell with configured directions and one shared
     unforced trajectory per block, persisting the retained block-level
     objects and returning the per-condition cycle means."""
     omega = checked["omega"]

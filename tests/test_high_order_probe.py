@@ -41,6 +41,34 @@ def test_six_direction_lookup_finds_every_signed_condition():
     assert found == set(range(1, 37))
 
 
+def test_probe_config_accepts_the_demonstrated_three_axis_design():
+    config = {
+        "omega": 5.938,
+        "strengths": [5.0, 6.0, 7.0],
+        "block_count": 256,
+        "discard_time": 160.0,
+        "n_phase": 32,
+        "harmonics": [0, 1, 2, 3, 4, 5],
+        "observation_rule": {
+            "minimum_cycles": 64,
+            "minimum_physical_time": 400.0,
+        },
+        "protocol": {
+            "directions": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        },
+        "dense": {
+            "dt": 0.05,
+            "n_theta_bins": 256,
+            "welch_segment": 512,
+            "max_psd_bins": 256,
+        },
+        "retention": {},
+    }
+    checked = probe.validate_probe_config(config)
+    assert len(checked["directions"]) == 3
+    assert probe.probe_task_counts(checked)["conditions_per_block"] == 19
+
+
 def test_even_harmonic_uses_paired_unforced_subtraction():
     directions, strengths, vectors = _design()
     blocks = 6

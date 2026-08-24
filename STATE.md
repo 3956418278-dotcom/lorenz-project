@@ -36,9 +36,10 @@ are numerical-bias questions separate from sampling uncertainty.
   policy, chunk layout, and selected-condition spectrum loading.
 - `src/lorenz/response_plots.py` owns reusable response rendering, including
   high-order probe figures.
-- `src/lorenz/high_order_probe.py` composes the one-frequency high-order
-  signal-discovery run, extension compatibility, inference tables, and artifact
-  persistence. `experiments/run_high_order_probe.py` is its thin CLI.
+- `src/lorenz/high_order_probe.py` composes one-frequency harmonic runs over
+  configured paired forcing directions, extension compatibility, inference
+  tables, and artifact persistence. `experiments/run_high_order_probe.py` is
+  its thin CLI.
 - `experiments/plot_high_order_probe_figure_a.py` is a streaming view of a
   completed artifact. It reuses shared condition/contrast/noise definitions and
   writes presentation outputs under `outputs/figures/`, outside immutable
@@ -47,15 +48,26 @@ are numerical-bias questions separate from sampling uncertainty.
   coefficient analysis for the `omega=5.938` completed artifact. It uses the
   crossed block covariance over all seven amplitudes and currently restricts
   inputs to the three coordinate axes.
+- `experiments/analyze_quadratic_b512_refinement.py` is the focused read-only
+  comparison of the nested `B=256` and `B=512`, `h={4,6,8}` single-axis
+  designs. It reuses the coefficient analysis definitions and reports only the
+  three allowed `z`-output diagonal-input quadratic coefficients.
 
 The active standalone high-order production configurations are:
 
 - `configs/production/high_order_probe_omega_6p7_v1.json`;
 - `configs/production/high_order_probe_omega_5p938_v1.json`.
 
-Each describes the complete seven-strength design directly. Incremental
+These describe the complete seven-strength designs directly. Incremental
 base/extension configuration history is retained only in executed artifacts'
 `config_snapshot.json` and manifests.
+
+The completed single-axis refinement configurations are:
+
+- `configs/production/single_axis_coefficients_omega_5p938_h5_h6_h7_v1.json`
+  (`B=256`, filling the amplitude gap);
+- `configs/production/single_axis_coefficients_omega_5p938_h4_h6_h8_b512_v1.json`
+  (`B=512`, refining the candidate quadratic regime).
 
 ## Confirmed Numerical and Statistical Evidence
 
@@ -122,50 +134,100 @@ interpreted as a perturbative tensor estimate.
 
 ### Single-axis coefficient estimates at `omega=5.938`
 
-The first coefficient analysis uses the self-contained final `B=256` artifact
-once; its base and extension artifacts share block IDs and are provenance, not
-additional replicates. All strengths `{2,4,8,10,12,14,16}` enter the fit.
+The coefficient analysis combines the immutable seven-amplitude artifact with
+the completed axis-only `h={5,6,7}` artifact. Both use exactly the ordered block
+IDs `2700000..2700255`; all numerical, ensemble, sampling, dense, and retention
+settings agree, and their independently regenerated unforced coefficients are
+bitwise identical. The merged crossed-block grid is
+`{2,4,5,6,7,8,10,12,14,16}`. Mixed directions were not simulated.
 
-- Signed first-harmonic odd contrasts require raw powers `{h,h^3,h^5}` to pass
-  the global crossed-block Hotelling-F lack-of-fit check over
-  Lorenz-parity-allowed components; the subsequent `h^7` term gives a marginal
-  but retained improvement (`nested p=0.0403`). The selected
-  `{h,h^3,h^5,h^7}` model has lack-of-fit `p=0.500`.
-- A constant `even(n=2)/h^2` coefficient is inconsistent with the amplitude
-  series (`p=1.33e-14`). Raw powers `{h^2,h^4}` are the lowest adequate model
-  (`p=0.540`), so the reported quadratic coefficient accounts for visible
-  quartic contamination rather than using the `h=16` ratio directly.
-- Adding `h^6` is marginal (`nested p=0.0683`) and is retained in the model and
-  fit-range sensitivity records. Pointwise 95% intervals are conditional on
-  the selected `{h^2,h^4}` model.
-- For the three Lorenz-parity-allowed diagonal-input second-harmonic
-  coefficients `Q` defined by `even_hat_i(2 omega)=h^2 Q_i,jj+O(h^4)`, the
-  signed `(cos,sin)` estimates are: `Q_z,xx=(0.0001812,-0.0001670)`,
-  `Q_z,yy=(0.0008267,0.0001895)`, and
-  `Q_z,zz=(0.0003194,-0.0001990)`. All nine raw estimates and intervals are in
-  the analysis artifact.
+The zero-strength audit compares raw powers `{h,h^3}` versus `{h,h^3,h^5}`
+and `{h^2,h^4}` versus `{h^2,h^4,h^6}` on 13 progressive upper-amplitude
+windows, both including `h=2` and excluding it. Its 416 fits retain signed
+cosine and sine separately with block-level pointwise 95% intervals.
+
+- For first order, `{h,h^3,h^5}` passes the global lack-of-fit check
+  (`p=0.800`); the next `h^7` improvement is borderline but not retained at the
+  prespecified threshold (`p=0.0507`). Every allowed first-order coefficient is
+  nevertheless amplitude-window-sensitive once the newly available low
+  windows are tested. `L_yx`, `L_yy`, and both parts of `L_zz` lack a common
+  overlap across all fit intervals.
+- For second order, quartic correction remains necessary. The added data now
+  support a global `h^6` contribution (`nested p=0.00152`), confirming that
+  higher-even-order curvature is not just an `h=16` effect.
+- `Q_z,xx` is borderline: all fit intervals overlap and its largest order and
+  window shifts are about `1.77` and `1.93` median sampling half-widths.
+  `Q_z,yy` and `Q_z,zz` remain model-sensitive, driven primarily by their sine
+  intercepts; `Q_z,yy` sine has no common all-fit interval.
+
+A focused candidate-regime diagnostic excludes `h=2` from fitting, uses
+`h={4,5,6,7,8}` for `Q(h)=Q+C4*h^2`, and treats the `h=4..16` fit only as a
+large-amplitude reference. On `h=4..8`, constant `Q(h)` is jointly adequate
+(`p=0.717`), adding `C4` is not jointly supported (`p=0.227`), and five of six
+component-wise `C4` intervals include zero. The exception is `Q_z,yy` sine:
+`C4=-6.67e-6` with 95% interval `[-1.30e-5,-3.75e-7]`; its low-range and
+full-range intercept intervals do not overlap. Thus there is no single regime
+that is both measured and contamination-free for all three complex
+coefficients. `Q_z,yy` cosine is the clearest stable measured component;
+`Q_z,xx` and both `Q_z,zz` low-range intercepts remain sampling-limited.
+
+Adding `h=5,6,7` therefore does not resolve the zero-strength intercept. It
+shows that sparse amplitude placement was not the sole cause: sampling noise
+still destabilizes short high-order fits, while systematic curvature persists
+across the longer windows. No single final intercept is selected.
+
+The subsequent nested `B=512` refinement at `h={4,6,8}` preserves the first
+256 block IDs exactly. Its regenerated unforced coefficients and all raw
+first-256 odd/even contrasts are bitwise identical to the earlier `B=256`
+artifacts. For the six signed components of `Q_z,xx`, `Q_z,yy`, and `Q_z,zz`,
+the fitted model is `even(h)/h^2 = Q + C4*h^2` with full crossed-block
+covariance.
+
+- The `Q` interval half-width ratios, `B=512` over matched `B=256`, are
+  `0.692--0.733`, consistent with the expected `0.705` sampling reduction.
+  Every nested central-value shift is compatible with zero.
+- `Q_z,yy` cosine and sine and `Q_z,zz` cosine are measured at `B=512`; the
+  two `Q_z,xx` components and `Q_z,zz` sine remain sampling-limited.
+- Only `Q_z,yy` sine has a resolved finite-amplitude slope:
+  `C4=-5.73e-6`, 95% interval `[-1.09e-5,-5.71e-7]`. The corresponding fitted
+  change from `h=4` to `h=8` is `-2.75e-4`, about 43% of its extrapolated
+  intercept.
+- Across all six signed components, the constant model remains jointly
+  adequate (`p=0.398`), adding `C4` is not jointly required (`p=0.236`), and
+  the `Q+C4*h^2` model has no resolved residual curvature (`p=0.579`). These
+  global statements do not erase the individually resolved `Q_z,yy` sine
+  slope.
 
 Analysis artifact:
-`outputs/analysis/single_axis_coefficients_omega_5p938_v1/`.
+`outputs/analysis/single_axis_coefficients_omega_5p938_h5_h6_h7_v2/`.
+
+Refinement analysis artifact:
+`outputs/analysis/single_axis_quadratic_b512_refinement_v1/`.
+
+Single-axis production artifacts:
+
+- `outputs/production/single_axis_coefficients_omega_5p938_h4_h6_h8_b512_v1/20260824T125050_d90049066676/`;
+- `outputs/production/single_axis_coefficients_omega_5p938_h5_h6_h7_v1/20260824T074945_7878c8a09d92/`.
 
 ## Current Scientific Decision
 
-The project has not established an overlap between:
+For practical single-axis second-order estimation, `h=4..8` is now the
+supported working regime when its finite-amplitude `C4` correction is retained;
+it is not a universal flat `even/h^2` plateau. The doubled block count behaves
+as a sampling refinement, and the three-point `Q+C4*h^2` model shows no
+resolved still-higher curvature inside this range. Remaining uncertainty is
+sampling-dominated for `Q_z,xx` and `Q_z,zz` sine. For `Q_z,yy` sine, the
+dominant qualification is the resolved `Q`--`C4` extrapolation dependence,
+which more blocks cannot remove. Fits extending to `h>=10` remain
+large-amplitude references rather than definitions of this regime.
 
-1. an asymptotic strength range where higher-order contamination is bounded;
-2. an identification range where the response exceeds chaotic sampling noise.
-
-The completed high-order probes establish visibility of harmonics `n=1..5` at
-large forcing. The single-axis calculation now provides model-based
-zero-strength extrapolations, but it does not establish a directly resolved
-small-amplitude perturbative window: `h=2` is weak for second order, while the
-large amplitudes require higher-power correction. The reported pointwise
-intervals therefore do not include polynomial-order uncertainty.
+These results support the candidate regime but do not establish a general
+small-amplitude perturbative window for every response coefficient. Pointwise
+intervals quantify sampling for the specified fit; polynomial-order and
+amplitude-window spread remain separate extrapolation uncertainties.
 
 Cross-input `xy`, `xz`, and `yz` coefficients have deliberately not been
-calculated. A future expensive amplitude-scaling design remains unconfirmed
-and requires user judgment; no new simulation is authorized by the current
-analysis.
+calculated. No further production simulation is currently authorized.
 
 The complete two-frequency second-order surface and multi-tone forcing remain
 outside scope.
