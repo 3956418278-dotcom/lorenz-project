@@ -4,6 +4,7 @@ from lorenz.direction_design import (
     INPUT_PAIR_ORDER,
     balanced_quadratic_direction_design,
     build_direction_design,
+    direction_identity,
     lorenz_effective_quadratic_sector_mask,
     lorenz_linear_sector_mask,
     minimal_quadratic_direction_design,
@@ -47,6 +48,14 @@ def test_d9_is_balanced_and_has_reconstruction_residuals():
     assert design.quadratic_residual_degrees_of_freedom == 3
     np.testing.assert_allclose(design.linear_condition_number, 1.0)
     np.testing.assert_allclose(design.quadratic_condition_number, np.sqrt(2))
+
+
+def test_direction_identity_uses_the_design_coordinate_convention():
+    assert direction_identity([1, 0, 0]) == ("x", "x")
+    assert direction_identity([2**-0.5, 0, 2**-0.5]) == (
+        "(x+z)/sqrt(2)",
+        "x_plus_z",
+    )
 
 
 def test_lorenz_sector_masks_recover_known_x_direction_null_controls():

@@ -7,8 +7,13 @@ from lorenz.retention import (
     RetentionPolicy,
     chunk_file_name,
     chunk_ranges,
+    condition_axis_permutation,
+    condition_index,
     condition_labels,
     condition_table,
+    load_spectrum_conditions,
+    paired_condition_indices,
+    paired_condition_vectors,
     parse_retention_policy,
     write_block_level_chunk,
     write_condition_metadata,
@@ -70,6 +75,39 @@ def test_condition_table_pairs_signs_strengths_and_directions():
     assert condition_labels(forcing_vectors) == (
         "unforced", "+0.5", "-0.5", "+2", "-2", "+1",
     )
+
+
+def test_paired_condition_axis_owns_lookup_and_reordering():
+    directions = np.asarray(((1, 0, 0), (0, 1, 0)), dtype=float)
+    strengths = np.asarray((0.5, 2.0))
+    canonical = paired_condition_vectors(directions, strengths)
+    assert canonical.shape == (9, 3)
+    assert condition_index(canonical, [0.0, 2.0, 0.0]) == 7
+    assert paired_condition_indices(canonical, directions[1], 2.0) == (7, 8)
+    source = canonical[[0, 3, 4, 1, 2, 7, 8, 5, 6]]
+    permutation = condition_axis_permutation(source, canonical)
+    np.testing.assert_array_equal(source[permutation], canonical)
+
+
+def test_selected_spectrum_conditions_load_across_chunks(tmp_path):
+    directory = tmp_path / "omega_2"
+    directory.mkdir()
+    grid = np.asarray((0.0, 1.0, 2.0))
+    for start in (0, 2):
+        spectrum = np.arange(2 * 3 * 1 * 3).reshape(2, 3, 1, 3) + 100 * start
+        write_block_level_chunk(
+            directory / chunk_file_name("omega_2", start, start + 2),
+            {
+                "block_ids": np.arange(start, start + 2),
+                "spectrum": spectrum.astype(complex),
+                "spectrum_frequency_grid": grid,
+            },
+        )
+    selected, loaded_grid = load_spectrum_conditions(
+        tmp_path, "omega_2", [2, 0]
+    )
+    assert selected.shape == (4, 2, 1, 3)
+    np.testing.assert_array_equal(loaded_grid, grid)
 
 
 def test_chunk_ranges_cover_the_block_axis():

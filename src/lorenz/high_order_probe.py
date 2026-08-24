@@ -27,16 +27,10 @@ import argparse
 import csv
 import io
 import json
-import os
 from pathlib import Path
 import time
 
 import numpy as np
-
-os.environ.setdefault("MPLBACKEND", "Agg")
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/lorenz-matplotlib")
-import matplotlib.pyplot as plt
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,10 +45,22 @@ from .artifacts import (
 from .retention import (
     chunk_file_name,
     chunk_ranges,
+    condition_axis_permutation,
+    load_spectrum_conditions,
+    paired_condition_indices,
+    paired_condition_vectors,
     parse_retention_policy,
     write_block_level_chunk,
 )
-from .statistics import cos_sin_statistics
+from .response import harmonic_order_contrast, paired_order_contrasts
+from .response_plots import (
+    figure_probe_detection_overview,
+    figure_probe_signed_responses,
+    figure_probe_spectrum_noise,
+    save_figure,
+)
+from .statistics import benjamini_hochberg, cos_sin_statistics
+from .direction_design import direction_identity
 from .strength_study import (
     STATE_NAMES,
     CycleFourierSampling,
@@ -106,6 +112,13 @@ def validate_probe_config(config: dict) -> dict:
         for field in ("dt", "n_theta_bins", "welch_segment", "max_psd_bins"):
             if float(dense[field]) <= 0:
                 raise ValueError(f"dense.{field} must be positive")
+    inference = config.get("inference") or {}
+    confidence = float(inference.get("confidence", 0.95))
+    fdr_alpha = float(inference.get("fdr_alpha", 0.05))
+    if not 0 < confidence < 1:
+        raise ValueError("inference.confidence must lie strictly between zero and one")
+    if not 0 < fdr_alpha < 1:
+        raise ValueError("inference.fdr_alpha must lie strictly between zero and one")
     policy = parse_retention_policy(config, block_count)
     extension = _validate_extension_config(config, strengths)
     return {
@@ -116,6 +129,8 @@ def validate_probe_config(config: dict) -> dict:
         "cycles": cycles,
         "harmonics": [int(value) for value in harmonics],
         "retention_policy": policy,
+        "confidence": confidence,
+        "fdr_alpha": fdr_alpha,
         "extension": extension,
     }
 
@@ -182,34 +197,6 @@ def probe_task_counts(checked: dict) -> dict:
     }
 
 
-def _forcing_vectors(directions, strengths, *, include_unforced: bool) -> np.ndarray:
-    vectors = [np.zeros(3)] if include_unforced else []
-    vectors.extend(
-        sign * strength * direction
-        for direction in directions
-        for strength in strengths
-        for sign in (1.0, -1.0)
-    )
-    return np.asarray(vectors, dtype=float)
-
-
-def _condition_axis_permutation(source_vectors, target_vectors) -> np.ndarray:
-    permutation = []
-    source_vectors = np.asarray(source_vectors, dtype=float)
-    for target in np.asarray(target_vectors, dtype=float):
-        matches = np.flatnonzero(
-            np.all(np.isclose(source_vectors, target, rtol=0.0, atol=1e-9), axis=1)
-        )
-        if len(matches) != 1:
-            raise ValueError(
-                f"expected one source condition for {target}, found {len(matches)}"
-            )
-        permutation.append(int(matches[0]))
-    if len(set(permutation)) != len(source_vectors):
-        raise ValueError("source and target condition axes are not one-to-one")
-    return np.asarray(permutation, dtype=int)
-
-
 def _base_artifact_spec(config: dict, checked: dict, blocks) -> dict:
     extension = checked["extension"]
     artifact = extension["base_artifact"]
@@ -247,7 +234,7 @@ def _base_artifact_spec(config: dict, checked: dict, blocks) -> dict:
         )
         base_strengths = np.asarray(checkpoint[f"{prefix}_strengths"], dtype=float)
         base_harmonics = np.asarray(checkpoint[f"{prefix}_harmonics"], dtype=int)
-    expected_vectors = _forcing_vectors(
+    expected_vectors = paired_condition_vectors(
         base_checked["directions"], base_checked["strengths"], include_unforced=True
     )
     if not np.array_equal(base_ids, np.asarray(blocks.block_ids, dtype=np.uint32)):
@@ -321,7 +308,9 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
     directions = checked["directions"]
     block_count = checked["block_count"]
     workers = int(config.get("workers", 1))
-    forcing_vectors = _forcing_vectors(directions, strengths, include_unforced=True)
+    forcing_vectors = paired_condition_vectors(
+        directions, strengths, include_unforced=True
+    )
     condition_count = len(forcing_vectors)
     sampling = CycleFourierSampling(
         omega=omega,
@@ -445,16 +434,16 @@ def _generate_extension_probe_cell(
     new_strengths = checked["extension"]["new_strengths"]
     block_count = checked["block_count"]
     workers = int(config.get("workers", 1))
-    extension_vectors = _forcing_vectors(
+    extension_vectors = paired_condition_vectors(
         directions, new_strengths, include_unforced=True
     )
     source_vectors = np.concatenate(
         (base["condition_vectors"], extension_vectors[1:]), axis=0
     )
-    combined_vectors = _forcing_vectors(
+    combined_vectors = paired_condition_vectors(
         directions, checked["strengths"], include_unforced=True
     )
-    condition_permutation = _condition_axis_permutation(
+    condition_permutation = condition_axis_permutation(
         source_vectors, combined_vectors
     )
     integrated_condition_count = len(extension_vectors)
@@ -742,17 +731,15 @@ def build_response_map(cell: dict, checked: dict) -> list:
     unforced = means[:, unforced_index]
     entries = []
     for direction_index, direction in enumerate(directions):
-        direction_label = _direction_label(direction)
+        direction_label, _ = direction_identity(direction)
         for strength in strengths:
             strength = float(strength)
-            plus = _condition_for(cell, direction, +strength)
-            minus = _condition_for(cell, direction, -strength)
-            odd = (means[:, plus] - means[:, minus]) / 2
-            # The existing paired response definition removes the shared
-            # unforced block from the even contrast.  This is essential for
-            # testing forced n=2,4 response rather than a raw chaotic Fourier
-            # coefficient against zero.
-            even = (means[:, plus] + means[:, minus]) / 2 - unforced
+            plus, minus = paired_condition_indices(
+                cell["condition_vectors"], direction, strength
+            )
+            odd, even = paired_order_contrasts(
+                means[:, plus], means[:, minus], unforced
+            )
             for harmonic in harmonics:
                 for output, name in enumerate(STATE_NAMES):
                     if harmonic == 0:
@@ -770,12 +757,12 @@ def build_response_map(cell: dict, checked: dict) -> list:
                             "se": se,
                         })
                         continue
-                    values = (
-                        odd[:, output, idx[harmonic]]
-                        if harmonic % 2 == 1
-                        else even[:, output, idx[harmonic]]
+                    values = harmonic_order_contrast(odd, even, harmonic)[
+                        :, output, idx[harmonic]
+                    ]
+                    stats = cos_sin_statistics(
+                        values, confidence=float(checked.get("confidence", 0.95))
                     )
-                    stats = cos_sin_statistics(values)
                     entries.append({
                         "direction": direction_index,
                         "direction_label": direction_label,
@@ -800,44 +787,12 @@ def build_response_map(cell: dict, checked: dict) -> list:
     return entries
 
 
-def _direction_label(direction):
-    direction = np.asarray(direction, dtype=float)
-    nonzero = np.flatnonzero(np.abs(direction) > 1e-12)
-    if len(nonzero) == 1 and np.isclose(direction[nonzero[0]], 1.0):
-        return STATE_NAMES[nonzero[0]]
-    if (
-        len(nonzero) == 2
-        and np.allclose(direction[nonzero], 2 ** -0.5, atol=1e-12)
-    ):
-        return f"({STATE_NAMES[nonzero[0]]}+{STATE_NAMES[nonzero[1]]})/sqrt(2)"
-    return "".join(
-        f"{direction[index]:+g}{STATE_NAMES[index]}" for index in nonzero
-    )
-
-
-def _condition_for(cell, direction, signed_strength):
-    direction = np.asarray(direction, dtype=float)
-    target = direction * float(signed_strength)
-    for index, vector in enumerate(cell["condition_vectors"]):
-        if np.allclose(vector, target, rtol=0.0, atol=1e-9):
-            return index
-    raise ValueError(
-        f"condition direction={direction} signed={signed_strength} not found"
-    )
-
-
 def add_probe_q_values(entries: list, alpha: float = 0.05) -> None:
     """Add BH q-values over the complete non-DC probe family in ``entries``."""
     tested = [entry for entry in entries if entry["harmonic"] != 0]
-    p_values = np.asarray([entry["hotelling_p"] for entry in tested], dtype=float)
-    order = np.argsort(p_values)
-    ranked = p_values[order]
-    count = len(ranked)
-    adjusted = ranked * count / np.arange(1, count + 1)
-    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
-    adjusted = np.clip(adjusted, 0.0, 1.0)
-    q_values = np.empty_like(adjusted)
-    q_values[order] = adjusted
+    q_values = benjamini_hochberg(
+        [entry["hotelling_p"] for entry in tested]
+    )
     for entry, q_value in zip(tested, q_values):
         entry["hotelling_q_bh"] = float(q_value)
         entry["detected_q05"] = bool(q_value <= alpha)
@@ -845,7 +800,9 @@ def add_probe_q_values(entries: list, alpha: float = 0.05) -> None:
 
 def attach_background_scales(entries, output_dir, prefix, omega):
     """Attach direct-response / single-block chaotic-spectrum display ratios."""
-    unforced, frequency_grid = _load_spectrum_conditions(output_dir, prefix, [0])
+    unforced, frequency_grid = load_spectrum_conditions(
+        output_dir / BLOCK_LEVEL_DIRECTORY, prefix, [0]
+    )
     background = unforced[:, 0]  # block, output, frequency
     for entry in entries:
         if entry["harmonic"] == 0:
@@ -863,25 +820,6 @@ def attach_background_scales(entries, output_dir, prefix, omega):
             float(entry["magnitude_derived"] / median) if median > 0 else None
         )
     return background, frequency_grid
-
-
-def _load_spectrum_conditions(output_dir, prefix, condition_indices):
-    pieces = []
-    frequency_grid = None
-    paths = sorted((output_dir / BLOCK_LEVEL_DIRECTORY / prefix).glob("*.npz"))
-    if not paths:
-        raise ValueError("no retained block spectra were found")
-    for path in paths:
-        with np.load(path, allow_pickle=False) as chunk:
-            if "spectrum" not in chunk:
-                raise ValueError(f"retained spectrum missing from {path}")
-            grid = np.asarray(chunk["spectrum_frequency_grid"], dtype=float)
-            if frequency_grid is None:
-                frequency_grid = grid
-            elif not np.array_equal(frequency_grid, grid):
-                raise ValueError("spectrum grids differ across chunks")
-            pieces.append(chunk["spectrum"][:, condition_indices])
-    return np.concatenate(pieces, axis=0), frequency_grid
 
 
 def _significance_rows(entries):
@@ -913,11 +851,12 @@ def _write_significance_csv(path, rows):
     writer = csv.DictWriter(stream, fieldnames=list(flattened[0]))
     writer.writeheader()
     writer.writerows(flattened)
-    path.write_text(stream.getvalue(), encoding="utf-8")
+    path.write_text(stream.getvalue(), encoding="utf-8", newline="")
 
 
 def build_detection_summary(entries, alpha=0.05):
     tested = [entry for entry in entries if entry["harmonic"] != 0]
+    harmonics = sorted({int(entry["harmonic"]) for entry in tested})
     by_strength = []
     for strength in sorted({float(entry["strength"]) for entry in tested}):
         detected = [
@@ -947,7 +886,7 @@ def build_detection_summary(entries, alpha=0.05):
             ],
         })
     by_harmonic = []
-    for harmonic in range(1, 6):
+    for harmonic in harmonics:
         cells = [entry for entry in tested if entry["harmonic"] == harmonic]
         strongest = min(cells, key=lambda entry: (entry["hotelling_q_bh"], -entry["hotelling_t2"]))
         by_harmonic.append({
@@ -965,10 +904,13 @@ def build_detection_summary(entries, alpha=0.05):
             },
         })
     return {
-        "detection_rule": "joint signed cos/sin Hotelling T2, BH q <= 0.05",
+        "detection_rule": f"joint signed cos/sin Hotelling T2, BH q <= {alpha:g}",
         "alpha": alpha,
         "multiplicity_method": "Benjamini-Hochberg FDR",
-        "probe_family": "all direction x output x harmonic(1..5) x strength cells",
+        "probe_family": (
+            "all direction x output x harmonic"
+            f"{harmonics} x strength cells"
+        ),
         "family_size": len(tested),
         "background_scale": (
             "median |S_b(Omega)| of single-block unforced retained spectra at "
@@ -978,165 +920,6 @@ def build_detection_summary(entries, alpha=0.05):
         "by_strength": by_strength,
         "by_harmonic": by_harmonic,
     }
-
-
-def _save_figure(fig, directory, stem):
-    directory.mkdir(parents=True, exist_ok=True)
-    fig.savefig(directory / f"{stem}.png", dpi=160, bbox_inches="tight")
-    fig.savefig(directory / f"{stem}.pdf", bbox_inches="tight")
-    plt.close(fig)
-
-
-def plot_signed_responses(entries, component, output_dir):
-    mean_key = f"mean_{component}"
-    ci_key = f"ci_{component}"
-    figure, axes = plt.subplots(6, 3, figsize=(13.5, 19), sharex=True)
-    colors = plt.cm.viridis(np.linspace(0.08, 0.92, 5))
-    for direction in range(6):
-        for output_index, output in enumerate(STATE_NAMES):
-            axis = axes[direction, output_index]
-            for harmonic, color in zip(range(1, 6), colors):
-                cells = sorted(
-                    [entry for entry in entries if entry["direction"] == direction
-                     and entry["output"] == output and entry["harmonic"] == harmonic],
-                    key=lambda entry: entry["strength"],
-                )
-                x = np.asarray([entry["strength"] for entry in cells])
-                y = np.asarray([entry[mean_key] for entry in cells])
-                ci = np.asarray([entry[ci_key] for entry in cells])
-                axis.errorbar(
-                    x, y, yerr=np.vstack((y - ci[:, 0], ci[:, 1] - y)),
-                    color=color, marker=None, linewidth=1.0,
-                    label=f"n={harmonic}",
-                )
-                for x_value, y_value, entry in zip(x, y, cells):
-                    axis.plot(
-                        x_value, y_value, marker="o", color=color,
-                        markerfacecolor=color if entry["detected_q05"] else "white",
-                        markersize=4,
-                    )
-            axis.axhline(0.0, color="#777777", linewidth=0.7)
-            axis.set_title(
-                f"{cells[0]['direction_label']} forcing -> {output}", fontsize=9
-            )
-            if direction == 5:
-                axis.set_xlabel("forcing amplitude h")
-            if output_index == 0:
-                axis.set_ylabel(f"signed {component} response")
-            if direction == 0 and output_index == 2:
-                axis.legend(ncol=1, fontsize=7)
-    figure.suptitle(
-        f"Signed {component} response at n=1..5 (95% t intervals; filled = BH q<=0.05)",
-        fontsize=12,
-    )
-    figure.tight_layout(rect=(0, 0, 1, 0.985))
-    _save_figure(figure, output_dir, f"signed_{component}_response")
-
-
-def plot_detection_overview(entries, output_dir):
-    strengths = sorted({float(entry["strength"]) for entry in entries})
-    figure, axes = plt.subplots(
-        1, len(strengths), figsize=(max(14.5, 3.0 * len(strengths)), 7.5),
-        sharey=True,
-    )
-    row_labels = []
-    for direction in range(6):
-        direction_entry = next(entry for entry in entries if entry["direction"] == direction)
-        row_labels.extend(
-            f"{direction_entry['direction_label']} -> {output}" for output in STATE_NAMES
-        )
-    image = None
-    for axis, strength in zip(axes, strengths):
-        matrix = np.zeros((18, 5))
-        for direction in range(6):
-            for output_index, output in enumerate(STATE_NAMES):
-                for harmonic in range(1, 6):
-                    entry = next(
-                        item for item in entries
-                        if item["direction"] == direction and item["output"] == output
-                        and item["harmonic"] == harmonic
-                        and float(item["strength"]) == strength
-                    )
-                    matrix[3 * direction + output_index, harmonic - 1] = min(
-                        -np.log10(max(entry["hotelling_q_bh"], 1e-300)), 20.0
-                    )
-                    if entry["detected_q05"]:
-                        axis.text(harmonic - 1, 3 * direction + output_index, "●",
-                                  ha="center", va="center", color="white", fontsize=7)
-        image = axis.imshow(matrix, aspect="auto", cmap="magma", vmin=0, vmax=8)
-        axis.set_title(f"h={strength:g}")
-        axis.set_xticks(range(5), [f"n={value}" for value in range(1, 6)])
-        axis.set_yticks(range(18), row_labels)
-    color_axis = figure.add_axes((0.945, 0.15, 0.015, 0.67))
-    figure.colorbar(image, cax=color_axis, label="-log10(BH q)")
-    figure.suptitle("High-order probe detections (white dot: joint signed test BH q<=0.05)")
-    figure.subplots_adjust(left=0.20, right=0.92, top=0.90, bottom=0.08, wspace=0.10)
-    _save_figure(figure, output_dir, "detection_overview")
-
-
-def plot_spectrum_noise(entries, cell, output_dir, artifact_dir, prefix, background, grid, omega):
-    strengths = sorted({float(entry["strength"]) for entry in entries})
-    figure, axes = plt.subplots(
-        len(strengths), 3, figsize=(15, 3.6 * len(strengths)), sharex=True
-    )
-    if len(strengths) == 1:
-        axes = np.asarray([axes])
-    for strength_index, strength in enumerate(strengths):
-        for output_index, output in enumerate(STATE_NAMES):
-            candidates = [
-                entry for entry in entries if entry["strength"] == strength
-                and entry["output"] == output and entry["harmonic"] != 0
-            ]
-            selected = min(candidates, key=lambda entry: (entry["hotelling_q_bh"], -entry["hotelling_t2"]))
-            direction = np.asarray(cell["directions"][selected["direction"]])
-            plus = _condition_for(cell, direction, +strength)
-            minus = _condition_for(cell, direction, -strength)
-            pair, pair_grid = _load_spectrum_conditions(artifact_dir, prefix, [plus, minus])
-            if not np.array_equal(grid, pair_grid):
-                raise ValueError("forced and unforced spectrum grids differ")
-            odd = (pair[:, 0] - pair[:, 1]) / 2
-            even = (pair[:, 0] + pair[:, 1]) / 2 - background
-            bg_abs = np.abs(background[:, output_index])
-            bg_median = np.median(bg_abs, axis=0)
-            bg_low, bg_high = np.quantile(bg_abs, (0.05, 0.95), axis=0)
-            axis = axes[strength_index, output_index]
-            axis.fill_between(grid, bg_low, bg_high, color="#c7c7c7", alpha=0.45,
-                              label="unforced blocks 5-95%")
-            axis.plot(grid, bg_median, color="#555555", linewidth=1.0,
-                      label="unforced median |S_b|")
-            axis.plot(grid, np.abs(odd.mean(axis=0)[output_index]), color="#1769aa",
-                      linewidth=1.1, label="coherent odd contrast")
-            axis.plot(grid, np.abs(even.mean(axis=0)[output_index]), color="#d95f02",
-                      linewidth=1.1, label="coherent even contrast")
-            for harmonic in range(1, 6):
-                axis.axvline(harmonic * omega, color="#888888", linestyle=":", linewidth=0.7)
-                direct = next(
-                    entry for entry in candidates
-                    if entry["direction"] == selected["direction"]
-                    and entry["harmonic"] == harmonic
-                )
-                axis.scatter(
-                    harmonic * omega, direct["magnitude_derived"], s=18,
-                    marker="D", color="#1769aa" if harmonic % 2 else "#d95f02",
-                    edgecolor="white", linewidth=0.4, zorder=5,
-                    label="direct known-frequency response" if harmonic == 1 else None,
-                )
-            axis.set_yscale("log")
-            axis.set_xlim(0, 5 * omega)
-            axis.set_title(
-                f"h={strength:g}, {selected['direction_label']} -> {output}"
-            )
-            if strength_index == len(strengths) - 1:
-                axis.set_xlabel("angular frequency Omega")
-            if output_index == 0:
-                axis.set_ylabel("spectral amplitude")
-            if strength_index == 0 and output_index == 2:
-                axis.legend(fontsize=7)
-    figure.suptitle(
-        "Strongest directional contrast per strength/output against original chaotic spectra"
-    )
-    figure.tight_layout(rect=(0, 0, 1, 0.97))
-    _save_figure(figure, output_dir, "spectrum_noise")
 
 
 def run_probe(config_path, resume_dir=None):
@@ -1182,11 +965,16 @@ def run_probe(config_path, resume_dir=None):
     }
     write_npz_atomic(checkpoint_dir / f"{prefix}.npz", checkpoint)
     entries = build_response_map(cell, checked)
-    add_probe_q_values(entries)
+    add_probe_q_values(entries, alpha=checked["fdr_alpha"])
     background, spectrum_grid = attach_background_scales(
         entries, output_dir, prefix, checked["omega"]
     )
-    family_size = 6 * len(STATE_NAMES) * 5 * len(checked["strengths"])
+    family_size = (
+        len(checked["directions"])
+        * len(STATE_NAMES)
+        * sum(harmonic != 0 for harmonic in checked["harmonics"])
+        * len(checked["strengths"])
+    )
     base_metadata = None
     if checked.get("extension") is not None:
         base = cell["base_artifact"]
@@ -1222,7 +1010,8 @@ def run_probe(config_path, resume_dir=None):
             "odd for odd n and even for even n"
         ),
         "detection_rule": (
-            "joint signed cos/sin Hotelling T2 with Benjamini-Hochberg q<=0.05 "
+            "joint signed cos/sin Hotelling T2 with Benjamini-Hochberg "
+            f"q<={checked['fdr_alpha']:g} "
             f"over the complete {family_size}-cell non-DC probe family"
         ),
         "directions": [value.tolist() for value in checked["directions"]],
@@ -1237,19 +1026,45 @@ def run_probe(config_path, resume_dir=None):
     write_json_atomic(output_dir / "significance_table.json", {
         "family_size": len(significance_rows),
         "multiplicity_method": "Benjamini-Hochberg FDR",
-        "detection_alpha": 0.05,
+        "detection_alpha": checked["fdr_alpha"],
         "rows": significance_rows,
     })
     _write_significance_csv(output_dir / "significance_table.csv", significance_rows)
-    summary = build_detection_summary(entries)
+    summary = build_detection_summary(entries, alpha=checked["fdr_alpha"])
     write_json_atomic(output_dir / "detection_summary.json", summary)
     figure_dir = output_dir / "figures"
-    plot_signed_responses(entries, "cos", figure_dir)
-    plot_signed_responses(entries, "sin", figure_dir)
-    plot_detection_overview(entries, figure_dir)
-    plot_spectrum_noise(
-        entries, cell, figure_dir, output_dir, prefix, background,
-        spectrum_grid, checked["omega"],
+    save_figure(
+        figure_probe_signed_responses(
+            entries, "cos", confidence=checked["confidence"]
+        ),
+        figure_dir,
+        "signed_cos_response",
+    )
+    save_figure(
+        figure_probe_signed_responses(
+            entries, "sin", confidence=checked["confidence"]
+        ),
+        figure_dir,
+        "signed_sin_response",
+    )
+    save_figure(
+        figure_probe_detection_overview(entries),
+        figure_dir,
+        "detection_overview",
+    )
+    save_figure(
+        figure_probe_spectrum_noise(
+            entries,
+            cell["directions"],
+            cell["condition_vectors"],
+            output_dir / BLOCK_LEVEL_DIRECTORY,
+            prefix,
+            background,
+            spectrum_grid,
+            checked["omega"],
+        ),
+        figure_dir,
+        "spectrum_noise",
     )
     provenance = {
         "config_identifier": f"sha256:{file_sha256(config_path)}",
@@ -1280,7 +1095,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT / "configs/production/high_order_probe_v1.json",
+        default=REPO_ROOT / "configs/production/high_order_probe_omega_6p7_v1.json",
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="validate the config and report task counts only")

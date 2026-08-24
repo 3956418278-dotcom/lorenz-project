@@ -4,6 +4,9 @@ import pytest
 from lorenz.response_plots import (
     ensemble_noise_floor,
     figure_block_spectra,
+    figure_probe_detection_overview,
+    figure_probe_signed_responses,
+    figure_probe_spectrum_noise,
     figure_frequency_response,
     figure_harmonic_content,
     figure_raw_trajectories,
@@ -11,6 +14,7 @@ from lorenz.response_plots import (
     mean_and_standard_error,
     save_figure,
 )
+from lorenz.retention import paired_condition_vectors
 
 
 def test_mean_and_standard_error_over_blocks():
@@ -171,3 +175,68 @@ def test_fluctuation_spectrum_removes_the_time_mean_peak():
     # the sinusoid peaks survive
     assert abs(spectrum.coefficients[0, 3]) > 0.1
     assert abs(spectrum.coefficients[1, 5]) > 0.1
+
+
+def test_probe_figures_derive_axes_from_entries_and_retained_conditions(tmp_path):
+    directions = np.asarray(((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
+    strengths = (1.0, 3.0)
+    harmonics = (1, 3)
+    outputs = ("x", "z")
+    entries = []
+    for direction, label in enumerate(("x", "y")):
+        for output in outputs:
+            for harmonic in harmonics:
+                for strength in strengths:
+                    mean = 0.1 * (1 + direction + harmonic + strength)
+                    entries.append({
+                        "direction": direction,
+                        "direction_label": label,
+                        "output": output,
+                        "harmonic": harmonic,
+                        "strength": strength,
+                        "mean_cos": mean,
+                        "mean_sin": -mean / 2,
+                        "ci_cos": (mean - 0.02, mean + 0.02),
+                        "ci_sin": (-mean / 2 - 0.02, -mean / 2 + 0.02),
+                        "hotelling_q_bh": 0.01 * harmonic,
+                        "hotelling_t2": 10.0 / harmonic,
+                        "detected_q05": harmonic == 1,
+                        "magnitude_derived": float(np.hypot(mean, mean / 2)),
+                    })
+
+    signed = figure_probe_signed_responses(entries, "cos")
+    overview = figure_probe_detection_overview(entries)
+    save_figure(signed, tmp_path, "probe_signed")
+    save_figure(overview, tmp_path, "probe_overview")
+
+    vectors = paired_condition_vectors(directions, strengths)
+    block_count = 4
+    grid = np.asarray((0.0, 1.0, 2.0, 3.0))
+    rng = np.random.default_rng(17)
+    spectra = (
+        rng.normal(size=(block_count, len(vectors), len(outputs), len(grid)))
+        + 1j
+        * rng.normal(size=(block_count, len(vectors), len(outputs), len(grid)))
+    )
+    spectrum_directory = tmp_path / "block_level" / "omega_1"
+    spectrum_directory.mkdir(parents=True)
+    np.savez(
+        spectrum_directory / "chunk_00000_00004.npz",
+        spectrum=spectra,
+        spectrum_frequency_grid=grid,
+    )
+    spectrum = figure_probe_spectrum_noise(
+        entries,
+        directions,
+        vectors,
+        tmp_path / "block_level",
+        "omega_1",
+        spectra[:, 0],
+        grid,
+        1.0,
+    )
+    save_figure(spectrum, tmp_path, "probe_spectrum")
+
+    assert (tmp_path / "probe_signed.png").is_file()
+    assert (tmp_path / "probe_overview.png").is_file()
+    assert (tmp_path / "probe_spectrum.png").is_file()

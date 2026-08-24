@@ -29,7 +29,7 @@ def json_ready(value: Any) -> Any:
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, Path):
-        return str(value)
+        return value.as_posix()
     if isinstance(value, tuple):
         return [json_ready(item) for item in value]
     if isinstance(value, dict):
@@ -57,6 +57,7 @@ def write_json_atomic(path: str | os.PathLike[str], value: Any) -> None:
         temporary.write_text(
             json.dumps(json_ready(value), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
+            newline="\n",
         )
         os.replace(temporary, path)
     finally:

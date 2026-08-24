@@ -57,15 +57,30 @@ Bring the decision to the user when it materially changes the project goal, the 
 
 ## Solve the selected scope properly
 
-Keep the current scope focused, but give it enough depth to be useful.
+Keep the current scope focused, but complete the result implied by that scope.
 
-A narrow task may still require substantial mathematical, numerical, algorithmic, or engineering work.
+A narrow task may still require substantial mathematical, numerical,
+algorithmic, or engineering work.
 
 Use real project inputs, formats, and constraints when they are available.
 
-Avoid replacing a difficult part of the actual problem with a toy substitute simply to complete the task quickly.
+Avoid replacing a difficult part of the actual problem with a toy substitute
+simply to complete the task quickly.
 
-Prefer one coherent path that works for the real project over several partial or overlapping paths.
+Prefer one coherent path that works for the real project over several partial
+or overlapping paths.
+
+Define completion by the state the selected scope should reach, not by the
+smallest individual edit that improves it.
+
+When work reveals additional problems that are part of the same selected
+boundary, follow them far enough to leave that boundary coherent. Do not turn
+known in-scope inconsistencies, duplicated ownership, or stale project state
+into deferred work merely to minimize the change.
+
+Defer an issue when it is genuinely outside the selected scope, requires a new
+project-level decision, or would materially expand the risk or cost of the
+current task.
 
 ---
 
@@ -152,13 +167,20 @@ than normalizing the dependency.
 Do not abstract hypothetical future needs. Consolidate structure when actual
 use shows that a capability has become shared.
 
+When repairing a structural boundary, judge the repair by the resulting
+ownership and dependency structure rather than by file movement or diff size.
+A repair should resolve the concrete duplication, misplaced responsibility, or
+conflicting representation that justified it.
+
 Keep exploratory and task-local work lightweight. Promote it into the durable
 project structure when it becomes a real project capability, and remove it when
 its purpose has passed and its result is preserved elsewhere.
 
-After changing the repository, leave its state legible. Permanent additions
-should have a clear purpose, temporary work should not accumulate unnoticed,
-and unrelated existing work should remain intact.
+After changing the repository, leave its active state coherent and legible.
+Code, configuration, project memory, and other maintained representations that
+belong to the changed capability should agree with the resulting structure.
+Temporary work should not accumulate unnoticed, and unrelated existing work
+should remain intact.
 
 Local complexity is acceptable when the problem requires it; do not let it
 propagate through the system.

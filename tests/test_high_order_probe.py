@@ -1,6 +1,11 @@
 import numpy as np
 
 from lorenz import high_order_probe as probe
+from lorenz.retention import (
+    condition_axis_permutation,
+    condition_index,
+    paired_condition_vectors,
+)
 
 
 def _design():
@@ -28,7 +33,7 @@ def test_six_direction_lookup_finds_every_signed_condition():
     directions, strengths, vectors = _design()
     cell = {"condition_vectors": vectors}
     found = {
-        probe._condition_for(cell, direction, sign * strength)
+        condition_index(cell["condition_vectors"], sign * strength * direction)
         for direction in directions
         for strength in strengths
         for sign in (1.0, -1.0)
@@ -43,8 +48,8 @@ def test_even_harmonic_uses_paired_unforced_subtraction():
     baseline = 5.0 + 2.0j
     response = 1.0 - 0.5j
     means[:, 0, 0, 2] = baseline
-    plus = probe._condition_for({"condition_vectors": vectors}, directions[1], 2.0)
-    minus = probe._condition_for({"condition_vectors": vectors}, directions[1], -2.0)
+    plus = condition_index(vectors, 2.0 * directions[1])
+    minus = condition_index(vectors, -2.0 * directions[1])
     means[:, plus, 0, 2] = baseline + response
     means[:, minus, 0, 2] = baseline + response
     entries = probe.build_response_map(
@@ -100,17 +105,17 @@ def test_extension_counts_only_redundant_unforced_and_new_pairs():
 
 def test_extension_condition_axis_is_reordered_to_canonical_four_strength_design():
     directions, base_strengths, _ = _design()
-    base_vectors = probe._forcing_vectors(
+    base_vectors = paired_condition_vectors(
         directions, base_strengths, include_unforced=True
     )
-    extension_vectors = probe._forcing_vectors(
+    extension_vectors = paired_condition_vectors(
         directions, np.asarray((16.0,)), include_unforced=True
     )
     appended = np.concatenate((base_vectors, extension_vectors[1:]), axis=0)
-    canonical = probe._forcing_vectors(
+    canonical = paired_condition_vectors(
         directions, np.asarray((2.0, 4.0, 8.0, 16.0)), include_unforced=True
     )
-    permutation = probe._condition_axis_permutation(appended, canonical)
+    permutation = condition_axis_permutation(appended, canonical)
     np.testing.assert_allclose(appended[permutation], canonical, rtol=0.0, atol=0.0)
     assert len(set(permutation.tolist())) == 49
 
@@ -118,7 +123,7 @@ def test_extension_condition_axis_is_reordered_to_canonical_four_strength_design
 def test_four_strength_response_map_defines_360_cell_bh_family():
     directions, _, _ = _design()
     strengths = np.asarray((2.0, 4.0, 8.0, 16.0))
-    vectors = probe._forcing_vectors(directions, strengths, include_unforced=True)
+    vectors = paired_condition_vectors(directions, strengths, include_unforced=True)
     rng = np.random.default_rng(7)
     means = (
         rng.normal(size=(8, len(vectors), 3, 6))
@@ -154,7 +159,7 @@ def test_three_strength_chained_extension_counts_and_630_cell_family():
     assert counts["forced_trajectories"] == 9216
     assert counts["total_condition_integrations"] == 9472
 
-    vectors = probe._forcing_vectors(directions, strengths, include_unforced=True)
+    vectors = paired_condition_vectors(directions, strengths, include_unforced=True)
     rng = np.random.default_rng(11)
     means = (
         rng.normal(size=(8, len(vectors), 3, 6))

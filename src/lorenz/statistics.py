@@ -112,6 +112,25 @@ def cos_sin_statistics(values, confidence: float = 0.95) -> CosSinStatistics:
     )
 
 
+def benjamini_hochberg(p_values) -> np.ndarray:
+    """Return Benjamini-Hochberg adjusted p-values in original order."""
+    p_values = np.asarray(p_values, dtype=float)
+    if (
+        p_values.ndim != 1
+        or len(p_values) < 1
+        or not np.isfinite(p_values).all()
+        or np.any((p_values < 0) | (p_values > 1))
+    ):
+        raise ValueError("p_values must be a nonempty finite vector in [0, 1]")
+    order = np.argsort(p_values)
+    ranked = p_values[order]
+    adjusted = ranked * len(ranked) / np.arange(1, len(ranked) + 1)
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    q_values = np.empty_like(adjusted)
+    q_values[order] = np.clip(adjusted, 0.0, 1.0)
+    return q_values
+
+
 @dataclass(frozen=True)
 class FrequencyResponses:
     """One collection of response values without a replication axis."""

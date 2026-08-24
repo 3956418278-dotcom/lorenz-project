@@ -75,6 +75,19 @@ def paired_order_contrasts(positive, negative, unforced):
     return odd, even
 
 
+def harmonic_order_contrast(odd, even, harmonic: int):
+    """Select the strength-parity contrast carrying one response harmonic."""
+    odd = np.asarray(odd)
+    even = np.asarray(even)
+    if odd.shape != even.shape:
+        raise ValueError("odd and even contrasts must have equal shapes")
+    if isinstance(harmonic, (bool, np.bool_)) or not isinstance(
+        harmonic, (int, np.integer)
+    ):
+        raise ValueError("harmonic must be an integer")
+    return odd if int(harmonic) % 2 else even
+
+
 def effective_phase_responses(odd, even, strength: float):
     """Scale paired contrasts into finite-strength phase response coefficients."""
     if not np.isfinite(strength) or strength <= 0:

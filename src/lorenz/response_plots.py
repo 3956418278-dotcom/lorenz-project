@@ -28,6 +28,9 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+from .response import paired_order_contrasts
+from .retention import load_spectrum_conditions, paired_condition_indices
 INK = "#0b0b0b"
 INK2 = "#52514e"
 MUTED = "#898781"
@@ -772,3 +775,197 @@ def figure_harmonic_content(
     if caption:
         _footer(fig, caption)
     return fig
+
+
+def figure_probe_signed_responses(entries, component, *, confidence: float = 0.95):
+    """Signed high-order response components over the configured strengths."""
+    mean_key = f"mean_{component}"
+    ci_key = f"ci_{component}"
+    directions = sorted({int(entry["direction"]) for entry in entries})
+    outputs = tuple(dict.fromkeys(entry["output"] for entry in entries))
+    harmonics = sorted({int(entry["harmonic"]) for entry in entries if entry["harmonic"]})
+    figure, axes = plt.subplots(
+        len(directions), len(outputs),
+        figsize=(4.5 * len(outputs), 3.15 * len(directions)),
+        sharex=True, squeeze=False,
+    )
+    colors = plt.cm.viridis(np.linspace(0.08, 0.92, len(harmonics)))
+    for row, direction in enumerate(directions):
+        for column, output in enumerate(outputs):
+            axis = axes[row, column]
+            direction_entries = [
+                entry for entry in entries
+                if entry["direction"] == direction and entry["output"] == output
+            ]
+            for harmonic, color in zip(harmonics, colors):
+                cells = sorted(
+                    [entry for entry in direction_entries if entry["harmonic"] == harmonic],
+                    key=lambda entry: entry["strength"],
+                )
+                x = np.asarray([entry["strength"] for entry in cells])
+                y = np.asarray([entry[mean_key] for entry in cells])
+                interval = np.asarray([entry[ci_key] for entry in cells])
+                axis.errorbar(
+                    x, y,
+                    yerr=np.vstack((y - interval[:, 0], interval[:, 1] - y)),
+                    color=color, marker=None, linewidth=1.0, label=f"n={harmonic}",
+                )
+                for x_value, y_value, entry in zip(x, y, cells):
+                    axis.plot(
+                        x_value, y_value, marker="o", color=color,
+                        markerfacecolor=color if entry["detected_q05"] else "white",
+                        markersize=4,
+                    )
+            axis.axhline(0.0, color=MUTED, linewidth=0.7)
+            axis.set_title(
+                f"{direction_entries[0]['direction_label']} forcing -> {output}",
+                fontsize=9,
+            )
+            if row == len(directions) - 1:
+                axis.set_xlabel("forcing amplitude h")
+            if column == 0:
+                axis.set_ylabel(f"signed {component} response")
+            if row == 0 and column == len(outputs) - 1:
+                axis.legend(ncol=1, fontsize=7)
+    figure.suptitle(
+        f"Signed {component} response ({100 * confidence:g}% intervals; "
+        "filled = BH detection)",
+        fontsize=12,
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.985))
+    return figure
+
+
+def figure_probe_detection_overview(entries):
+    """Multiplicity-adjusted detection map over the realized probe family."""
+    tested = [entry for entry in entries if entry["harmonic"] != 0]
+    strengths = sorted({float(entry["strength"]) for entry in tested})
+    directions = sorted({int(entry["direction"]) for entry in tested})
+    outputs = tuple(dict.fromkeys(entry["output"] for entry in tested))
+    harmonics = sorted({int(entry["harmonic"]) for entry in tested})
+    figure, axes = plt.subplots(
+        1, len(strengths), figsize=(max(6.0, 3.0 * len(strengths)), 7.5),
+        sharey=True, squeeze=False,
+    )
+    axes = axes[0]
+    row_labels = []
+    for direction in directions:
+        label = next(
+            entry["direction_label"] for entry in tested
+            if entry["direction"] == direction
+        )
+        row_labels.extend(f"{label} -> {output}" for output in outputs)
+    image = None
+    for axis, strength in zip(axes, strengths):
+        matrix = np.zeros((len(row_labels), len(harmonics)))
+        for direction_row, direction in enumerate(directions):
+            for output_index, output in enumerate(outputs):
+                for harmonic_index, harmonic in enumerate(harmonics):
+                    entry = next(
+                        item for item in tested
+                        if item["direction"] == direction
+                        and item["output"] == output
+                        and item["harmonic"] == harmonic
+                        and float(item["strength"]) == strength
+                    )
+                    row = len(outputs) * direction_row + output_index
+                    matrix[row, harmonic_index] = min(
+                        -np.log10(max(entry["hotelling_q_bh"], 1e-300)), 20.0
+                    )
+                    if entry["detected_q05"]:
+                        axis.text(
+                            harmonic_index, row, "●", ha="center", va="center",
+                            color="white", fontsize=7,
+                        )
+        image = axis.imshow(matrix, aspect="auto", cmap="magma", vmin=0, vmax=8)
+        axis.set_title(f"h={strength:g}")
+        axis.set_xticks(range(len(harmonics)), [f"n={value}" for value in harmonics])
+        axis.set_yticks(range(len(row_labels)), row_labels)
+    color_axis = figure.add_axes((0.945, 0.15, 0.015, 0.67))
+    figure.colorbar(image, cax=color_axis, label="-log10(BH q)")
+    figure.suptitle("High-order probe detections (white dot: BH detection)")
+    figure.subplots_adjust(left=0.20, right=0.92, top=0.90, bottom=0.08, wspace=0.10)
+    return figure
+
+
+def figure_probe_spectrum_noise(
+    entries, directions, condition_vectors, block_level_directory, prefix,
+    background, grid, omega
+):
+    """Strongest directional response per strength/output versus background."""
+    tested = [entry for entry in entries if entry["harmonic"] != 0]
+    strengths = sorted({float(entry["strength"]) for entry in tested})
+    outputs = tuple(dict.fromkeys(entry["output"] for entry in tested))
+    harmonics = sorted({int(entry["harmonic"]) for entry in tested})
+    figure, axes = plt.subplots(
+        len(strengths), len(outputs),
+        figsize=(5.0 * len(outputs), 3.6 * len(strengths)),
+        sharex=True, squeeze=False,
+    )
+    for strength_index, strength in enumerate(strengths):
+        for output_index, output in enumerate(outputs):
+            candidates = [
+                entry for entry in tested
+                if entry["strength"] == strength and entry["output"] == output
+            ]
+            selected = min(
+                candidates,
+                key=lambda entry: (entry["hotelling_q_bh"], -entry["hotelling_t2"]),
+            )
+            direction = np.asarray(directions[selected["direction"]], dtype=float)
+            plus, minus = paired_condition_indices(
+                condition_vectors, direction, strength
+            )
+            pair, pair_grid = load_spectrum_conditions(
+                block_level_directory, prefix, [plus, minus]
+            )
+            if not np.array_equal(grid, pair_grid):
+                raise ValueError("forced and unforced spectrum grids differ")
+            odd, even = paired_order_contrasts(pair[:, 0], pair[:, 1], background)
+            bg_abs = np.abs(background[:, output_index])
+            bg_median = np.median(bg_abs, axis=0)
+            bg_low, bg_high = np.quantile(bg_abs, (0.05, 0.95), axis=0)
+            axis = axes[strength_index, output_index]
+            axis.fill_between(
+                grid, bg_low, bg_high, color=CLOUD_BAND, alpha=0.45,
+                label="unforced blocks 5-95%",
+            )
+            axis.plot(
+                grid, bg_median, color=INK2, linewidth=1.0,
+                label="unforced median |S_b|",
+            )
+            axis.plot(
+                grid, np.abs(odd.mean(axis=0)[output_index]), color=SERIES[0],
+                linewidth=1.1, label="coherent odd contrast",
+            )
+            axis.plot(
+                grid, np.abs(even.mean(axis=0)[output_index]), color=SERIES[1],
+                linewidth=1.1, label="coherent even contrast",
+            )
+            for harmonic in harmonics:
+                axis.axvline(harmonic * omega, color=MUTED, linestyle=":", linewidth=0.7)
+                direct = next(
+                    entry for entry in candidates
+                    if entry["direction"] == selected["direction"]
+                    and entry["harmonic"] == harmonic
+                )
+                axis.scatter(
+                    harmonic * omega, direct["magnitude_derived"], s=18,
+                    marker="D", color=SERIES[0] if harmonic % 2 else SERIES[1],
+                    edgecolor="white", linewidth=0.4, zorder=5,
+                    label="direct known-frequency response" if harmonic == harmonics[0] else None,
+                )
+            axis.set_yscale("log")
+            axis.set_xlim(0, max(harmonics) * omega)
+            axis.set_title(f"h={strength:g}, {selected['direction_label']} -> {output}")
+            if strength_index == len(strengths) - 1:
+                axis.set_xlabel("angular frequency Omega")
+            if output_index == 0:
+                axis.set_ylabel("spectral amplitude")
+            if strength_index == 0 and output_index == len(outputs) - 1:
+                axis.legend(fontsize=7)
+    figure.suptitle(
+        "Strongest directional contrast per strength/output against original chaotic spectra"
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.97))
+    return figure

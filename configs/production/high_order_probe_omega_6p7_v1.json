@@ -1,15 +1,11 @@
 {
   "schema_version": 1,
-  "study_id": "high_order_probe_omega_6p7_h16_extension_v1",
-  "classification": "high_order_probe_h16_extension_v1",
-  "output_root": "outputs/production/high_order_probe_omega_6p7_h16_extension_v1",
+  "study_id": "high_order_signal_discovery_omega_6p7_v1",
+  "classification": "high_order_signal_discovery_v1",
+  "output_root": "outputs/production/high_order_signal_discovery_omega_6p7_v1",
   "runner_path": "experiments/run_high_order_probe.py",
   "omega": 6.7,
-  "strengths": [2.0, 4.0, 8.0, 16.0],
-  "extension": {
-    "base_artifact": "outputs/production/high_order_probe_v1/20260820T114248_31cc7991dfff",
-    "new_strengths": [16.0]
-  },
+  "strengths": [2.0, 4.0, 8.0, 10.0, 12.0, 14.0, 16.0],
   "block_count": 256,
   "workers": 8,
   "discard_time": 160.0,
@@ -40,7 +36,7 @@
     }
   },
   "protocol": {
-    "status": "high_order_probe_v1",
+    "status": "large-amplitude high-order signal discovery",
     "directions": [
       [1.0, 0.0, 0.0],
       [0.0, 1.0, 0.0],
@@ -68,11 +64,8 @@
     "block_spectra": true,
     "chunk_blocks": 32
   },
-  "bootstrap": {
+  "inference": {
     "confidence": 0.95,
-    "resamples": 9999,
-    "root_entropy": 2026081604,
-    "batch_size": 64,
-    "higher_order_fraction_limit": 0.2
+    "fdr_alpha": 0.05
   }
 }

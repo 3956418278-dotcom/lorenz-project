@@ -5,6 +5,7 @@ from lorenz.response import (
     directional_fourier_contrasts,
     directional_frequency_response,
     effective_phase_responses,
+    harmonic_order_contrast,
     monochromatic_quadratic_design,
     paired_order_contrasts,
     phase_fourier,
@@ -39,6 +40,8 @@ def test_paired_contrasts_isolate_linear_and_quadratic_terms():
 
     np.testing.assert_allclose(first, linear)
     np.testing.assert_allclose(second, quadratic)
+    np.testing.assert_array_equal(harmonic_order_contrast(odd, even, 3), odd)
+    np.testing.assert_array_equal(harmonic_order_contrast(odd, even, 4), even)
 
 
 def test_extracts_susceptibilities_with_sine_and_no_factorial_convention():

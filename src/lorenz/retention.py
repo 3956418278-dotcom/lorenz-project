@@ -162,6 +162,102 @@ def condition_labels(forcing_vectors) -> tuple[str, ...]:
     return tuple(labels)
 
 
+def paired_condition_vectors(
+    directions, strengths, *, include_unforced: bool = True
+) -> np.ndarray:
+    """Build the canonical unforced/paired-forcing condition axis.
+
+    Forced conditions are ordered by direction, then increasing strength,
+    then positive/negative sign. This is the shared condition-axis contract
+    used by production generation, extension merging, and artifact views.
+    """
+    directions = np.asarray(directions, dtype=float)
+    strengths = np.asarray(strengths, dtype=float)
+    if (
+        directions.ndim != 2
+        or directions.shape[1] != 3
+        or not np.isfinite(directions).all()
+    ):
+        raise ValueError("directions must have finite axes direction,state")
+    if strengths.ndim != 1 or not np.isfinite(strengths).all():
+        raise ValueError("strengths must be a finite one-dimensional array")
+    vectors = [np.zeros(3)] if include_unforced else []
+    vectors.extend(
+        sign * strength * direction
+        for direction in directions
+        for strength in strengths
+        for sign in (1.0, -1.0)
+    )
+    return np.asarray(vectors, dtype=float)
+
+
+def condition_index(forcing_vectors, target, *, atol: float = 1e-9) -> int:
+    """Return the unique condition-axis index matching a forcing vector."""
+    forcing_vectors = np.asarray(forcing_vectors, dtype=float)
+    target = np.asarray(target, dtype=float)
+    if forcing_vectors.ndim != 2 or target.shape != (forcing_vectors.shape[1],):
+        raise ValueError("forcing_vectors and target have incompatible state axes")
+    matches = np.flatnonzero(
+        np.all(np.isclose(forcing_vectors, target, rtol=0.0, atol=atol), axis=1)
+    )
+    if len(matches) != 1:
+        raise ValueError(f"expected one condition matching {target}, found {len(matches)}")
+    return int(matches[0])
+
+
+def paired_condition_indices(
+    forcing_vectors, direction, strength: float, *, atol: float = 1e-9
+) -> tuple[int, int]:
+    """Return the positive/negative indices for one direction and strength."""
+    direction = np.asarray(direction, dtype=float)
+    strength = float(strength)
+    if direction.shape != (3,) or not np.isfinite(direction).all():
+        raise ValueError("direction must be a finite three-vector")
+    if not np.isfinite(strength) or strength <= 0:
+        raise ValueError("strength must be finite and positive")
+    return (
+        condition_index(forcing_vectors, strength * direction, atol=atol),
+        condition_index(forcing_vectors, -strength * direction, atol=atol),
+    )
+
+
+def condition_axis_permutation(source_vectors, target_vectors) -> np.ndarray:
+    """Map a source condition axis onto the same vectors in target order."""
+    source_vectors = np.asarray(source_vectors, dtype=float)
+    target_vectors = np.asarray(target_vectors, dtype=float)
+    if source_vectors.shape != target_vectors.shape:
+        raise ValueError("source and target condition axes must have equal shapes")
+    permutation = np.asarray(
+        [condition_index(source_vectors, target) for target in target_vectors],
+        dtype=int,
+    )
+    if len(set(permutation.tolist())) != len(source_vectors):
+        raise ValueError("source and target condition axes are not one-to-one")
+    return permutation
+
+
+def load_spectrum_conditions(directory, prefix: str, condition_indices):
+    """Load selected retained spectrum conditions across all block chunks."""
+    directory = Path(directory)
+    indices = np.asarray(condition_indices, dtype=int)
+    pieces = []
+    frequency_grid = None
+    paths = sorted((directory / prefix).glob("*.npz"))
+    if not paths:
+        raise ValueError("no retained block spectra were found")
+    for path in paths:
+        with np.load(path, allow_pickle=False) as chunk:
+            if "spectrum" not in chunk:
+                raise ValueError(f"retained spectrum missing from {path}")
+            grid = np.asarray(chunk["spectrum_frequency_grid"], dtype=float)
+            if frequency_grid is None:
+                frequency_grid = grid
+            elif not np.array_equal(frequency_grid, grid):
+                raise ValueError("spectrum grids differ across chunks")
+            pieces.append(np.asarray(chunk["spectrum"][:, indices]))
+    return np.concatenate(pieces, axis=0), frequency_grid
+
+
 def chunk_ranges(block_count: int, chunk_blocks: int):
     """Yield ``(start, end)`` block index ranges covering the block axis."""
     block_count = int(block_count)

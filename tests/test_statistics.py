@@ -9,6 +9,7 @@ from lorenz.response import (
 from lorenz.statistics import (
     BlockFourierContrasts,
     BlockFrequencyResponses,
+    benjamini_hochberg,
     cos_sin_components,
     cos_sin_statistics,
     finite_strength_block_responses,
@@ -38,6 +39,13 @@ def test_raw_contrasts_become_finite_strength_responses_per_block():
     np.testing.assert_allclose(responses.rectification, 4 * even_dc)
     assert responses.first_order.shape == (2, 2)
     assert responses.block_ids == (10, 11)
+
+
+def test_benjamini_hochberg_preserves_order_and_monotonic_adjustment():
+    np.testing.assert_allclose(
+        benjamini_hochberg([0.01, 0.04, 0.03]),
+        [0.03, 0.04, 0.04],
+    )
 
 
 def test_realification_is_bijective_with_documented_ordering():

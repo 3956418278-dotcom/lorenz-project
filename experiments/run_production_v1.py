@@ -30,6 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from lorenz.artifacts import (  # noqa: E402
+    file_sha256,
     verify_file_identifiers,
     write_json_atomic,
 )
@@ -162,13 +163,13 @@ def main() -> None:
             + (f" (resuming {partial})" if partial else ""),
             flush=True,
         )
-        artifact_dir, manifest, runtime = run_x_response_pilot(
+        artifact_dir, _manifest, runtime = run_x_response_pilot(
             config_path, resume_dir=partial
         )
         verify_direction_artifact(artifact_dir, config)
         summary["artifacts"][key] = {
             "artifact_dir": str(artifact_dir),
-            "manifest_sha256": manifest["files"]["manifest.json"],
+            "manifest_sha256": f"sha256:{file_sha256(artifact_dir / 'manifest.json')}",
             "runtime_seconds": runtime,
             "direction": directions[direction_index],
         }

@@ -11,6 +11,7 @@ from .response import monochromatic_quadratic_design
 
 INPUT_PAIR_ORDER = ((0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2))
 LORENZ_PARITY = np.asarray((-1, -1, 1), dtype=int)
+STATE_NAMES = ("x", "y", "z")
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,28 @@ def balanced_quadratic_direction_design() -> DirectionDesign:
             (0, inverse_sqrt_two, -inverse_sqrt_two),
         ),
     )
+
+
+def direction_identity(direction) -> tuple[str, str]:
+    """Return a readable label and filesystem-safe slug for one direction."""
+    direction = np.asarray(direction, dtype=float)
+    if direction.shape != (3,) or not np.isfinite(direction).all():
+        raise ValueError("direction must be a finite three-vector")
+    nonzero = np.flatnonzero(np.abs(direction) > 1e-12)
+    if len(nonzero) == 1 and np.isclose(direction[nonzero[0]], 1.0):
+        name = STATE_NAMES[nonzero[0]]
+        return name, name
+    if (
+        len(nonzero) == 2
+        and np.allclose(direction[nonzero], 2 ** -0.5, atol=1e-12)
+    ):
+        left, right = (STATE_NAMES[index] for index in nonzero)
+        return f"({left}+{right})/sqrt(2)", f"{left}_plus_{right}"
+    label = "".join(
+        f"{direction[index]:+g}{STATE_NAMES[index]}" for index in nonzero
+    )
+    slug = label.replace("+", "plus_").replace("-", "minus_").replace(".", "p")
+    return label, slug
 
 
 def lorenz_linear_sector_mask() -> np.ndarray:
