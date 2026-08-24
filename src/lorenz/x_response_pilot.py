@@ -39,7 +39,7 @@ from .artifacts import (
 )
 from .core import sampling_grids
 from .direction_design import LORENZ_PARITY
-from .ensemble import SymmetricXYUniformProposal, generate_initial_state_blocks
+from .ensemble import generate_configured_initial_state_blocks
 from .retention import (
     chunk_file_name,
     chunk_ranges,
@@ -55,7 +55,7 @@ from .strength_study import (
     STATE_NAMES,
     CycleFourierSampling,
     StrengthStudyData,
-    _checked_strengths,
+    validate_strengths,
     frequency_key,
     integrate_phase_and_dense_conditions,
     minimum_duration_cycle_count,
@@ -126,7 +126,7 @@ def validate_x_response_config(config: dict) -> dict:
         or len(set(frequencies)) != len(frequencies)
     ):
         raise ValueError("frequencies must be distinct, positive, and increasing")
-    strengths = _checked_strengths(config["strengths"], minimum_count=2)
+    strengths = validate_strengths(config["strengths"], minimum_count=2)
     block_count = int(config["block_count"])
     if isinstance(block_count, bool) or block_count < 2:
         raise ValueError("block_count must be at least two")
@@ -307,39 +307,6 @@ def _write_chunk_file(
     write_block_level_chunk(path, arrays)
 
 
-def _proposal_from_config(config: dict):
-    proposal_cfg = config["initial_ensemble"]["proposal"]
-    return SymmetricXYUniformProposal(
-        x_half_width=proposal_cfg["x_half_width"],
-        y_half_width=proposal_cfg["y_half_width"],
-        z_bounds=tuple(proposal_cfg["z_bounds"]),
-    )
-
-
-def generate_production_blocks(config: dict):
-    """Generate the initial-state blocks of one run configuration.
-
-    Shared by every frequency cell of the run: the blocks depend only on the
-    initial-ensemble settings, so they are generated once and reused instead
-    of being re-integrated per frequency.
-    """
-    initial = config["initial_ensemble"]
-    block_id_start = int(initial["block_id_start"])
-    block_count = int(config["block_count"])
-    block_ids = tuple(range(block_id_start, block_id_start + block_count))
-    numerical_config = {
-        "lorenz": dict(config["lorenz"]),
-        "solver": dict(config["solver"]),
-    }
-    return generate_initial_state_blocks(
-        block_ids,
-        initial["root_entropy"],
-        _proposal_from_config(config),
-        float(initial["spinup_time"]),
-        numerical_config,
-    )
-
-
 def generate_x_response_cell(
     config: dict, omega: float, strengths, cycles: int, block_level_dir=None,
     precomputed_blocks=None,
@@ -351,7 +318,8 @@ def generate_x_response_cell(
     are written chunk-by-chunk into ``block_level_dir`` according to the
     configured retention policy; the in-memory cell carries only the
     block-level summaries the analysis family consumes.  Pass
-    ``precomputed_blocks`` (from :func:`generate_production_blocks`) to
+    ``precomputed_blocks`` (from
+    :func:`ensemble.generate_configured_initial_state_blocks`) to
     share one block generation across every frequency of a run.
     """
     started = time.perf_counter()
@@ -360,17 +328,16 @@ def generate_x_response_cell(
     block_id_start = int(config["initial_ensemble"]["block_id_start"])
     block_ids = tuple(range(block_id_start, block_id_start + block_count))
     if precomputed_blocks is None:
-        blocks = generate_production_blocks(config)
+        blocks = generate_configured_initial_state_blocks(config)
     else:
         blocks = precomputed_blocks
-    proposal = _proposal_from_config(config)
     numerical_config = {
         "lorenz": dict(config["lorenz"]),
         "solver": dict(config["solver"]),
     }
     protocol = config["protocol"]
     direction = np.asarray(protocol["direction"], dtype=float)
-    strengths = _checked_strengths(strengths, minimum_count=2)
+    strengths = validate_strengths(strengths, minimum_count=2)
     forcing_vectors = [np.zeros(3)]
     forcing_vectors.extend(
         sign * strength * direction
@@ -551,9 +518,9 @@ def generate_x_response_cell(
             "block_ids": blocks.block_ids,
             "child_spawn_keys": blocks.child_spawn_keys,
             "proposal": {
-                "x_half_width": proposal.x_half_width,
-                "y_half_width": proposal.y_half_width,
-                "z_bounds": proposal.z_bounds,
+                "x_half_width": blocks.proposal.x_half_width,
+                "y_half_width": blocks.proposal.y_half_width,
+                "z_bounds": blocks.proposal.z_bounds,
             },
             "spinup_time": blocks.spinup_time,
         },
@@ -909,7 +876,7 @@ def merge_cell(base: XResponseCell, extra: XResponseCell) -> XResponseCell:
             extra.study.positive_cycle_fourier[:, e_index],
         ):
             raise ValueError("merge found disagreeing shared strength cells")
-    combined = _checked_strengths(
+    combined = validate_strengths(
         list(base.study.strengths) + list(extra.study.strengths)
     )
     order = {float(value): index for index, value in enumerate(combined)}
@@ -1785,7 +1752,7 @@ def run_x_response_pilot(config_path, resume_dir=None):
     block_id_start = int(config["initial_ensemble"]["block_id_start"])
     checkpoint_dir = output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    blocks = generate_production_blocks(config)
+    blocks = generate_configured_initial_state_blocks(config)
     print(
         f"[{time.strftime('%H:%M:%S')}] initial-state blocks generated "
         f"({len(blocks.block_ids)} blocks)",

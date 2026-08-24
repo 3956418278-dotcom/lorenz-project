@@ -3,6 +3,7 @@ import pytest
 
 from lorenz.ensemble import (
     SymmetricXYUniformProposal,
+    generate_configured_initial_state_blocks,
     generate_initial_state_blocks,
 )
 
@@ -79,6 +80,47 @@ def test_each_block_has_unique_spawn_lineage_and_bounded_raw_proposal(
     assert np.all(blocks.raw_proposals >= proposal.lower)
     assert np.all(blocks.raw_proposals < proposal.upper)
     assert len(np.unique(blocks.raw_proposals, axis=0)) == len(blocks.block_ids)
+
+
+def test_configured_block_generation_owns_the_shared_run_adapter(monkeypatch):
+    captured = {}
+
+    def fake_generate(block_ids, root_seed, proposal, spinup_time, cfg):
+        captured.update(
+            block_ids=block_ids,
+            root_seed=root_seed,
+            proposal=proposal,
+            spinup_time=spinup_time,
+            cfg=cfg,
+        )
+        return "blocks"
+
+    monkeypatch.setattr("lorenz.ensemble.generate_initial_state_blocks", fake_generate)
+    config = {
+        "block_count": 3,
+        "lorenz": {"sigma": 10.0, "rho": 28.0, "beta": 8.0 / 3.0},
+        "solver": {"method": "DOP853", "rtol": 1e-9, "atol": 1e-11},
+        "initial_ensemble": {
+            "block_id_start": 42,
+            "root_entropy": 123,
+            "spinup_time": 40.0,
+            "proposal": {
+                "x_half_width": 20.0,
+                "y_half_width": 30.0,
+                "z_bounds": [0.0, 50.0],
+            },
+        },
+    }
+
+    assert generate_configured_initial_state_blocks(config) == "blocks"
+    assert captured["block_ids"] == (42, 43, 44)
+    assert captured["root_seed"] == 123
+    assert captured["spinup_time"] == 40.0
+    assert captured["proposal"].z_bounds == (0.0, 50.0)
+    assert captured["cfg"] == {
+        "lorenz": config["lorenz"],
+        "solver": config["solver"],
+    }
 
 
 def test_raw_proposals_and_post_spinup_states_are_separate(cfg, proposal):

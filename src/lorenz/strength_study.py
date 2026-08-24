@@ -103,7 +103,7 @@ def _positive_integer(value, name: str) -> int:
     return int(value)
 
 
-def _checked_strengths(strengths, *, minimum_count: int = 2) -> np.ndarray:
+def validate_strengths(strengths, *, minimum_count: int = 2) -> np.ndarray:
     strengths = np.asarray(strengths, dtype=float)
     if (
         strengths.ndim != 1
@@ -136,7 +136,7 @@ def _checked_harmonics(harmonics, n_phase: int) -> np.ndarray:
 
 def validate_strength_sampling_config(config: dict) -> dict:
     """Validate the shared numerical definition of one strength study."""
-    strengths = _checked_strengths(config["strengths"])
+    strengths = validate_strengths(config["strengths"])
     protocol = config["protocol"]
     omega = float(protocol["omega"])
     phase = float(protocol.get("phase", 0.0))
@@ -194,7 +194,7 @@ def validate_frequency_sampling_config(config: dict) -> dict:
         or len(set(frequencies)) != len(frequencies)
     ):
         raise ValueError("frequencies must be distinct, positive, and increasing")
-    strengths = _checked_strengths(config["strengths"], minimum_count=3)
+    strengths = validate_strengths(config["strengths"], minimum_count=3)
     block_count = _positive_integer(config["block_count"], "block_count")
     if block_count < 2:
         raise ValueError("block_count must be at least two")

@@ -9,6 +9,7 @@ __pycache__/
 # General caches
 .cache/
 cache/
+/_tmp_*
 
 # Outputs
 outputs/

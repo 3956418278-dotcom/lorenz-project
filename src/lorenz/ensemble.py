@@ -163,3 +163,34 @@ def generate_initial_state_blocks(
         lorenz_parameters=lorenz_parameters,
         solver_options=solver_options,
     )
+
+
+def generate_configured_initial_state_blocks(config: dict) -> InitialStateBlocks:
+    """Generate the shared initial-state ensemble described by a run config.
+
+    This adapter translates the repository's common ``initial_ensemble``
+    contract into the lower-level block generator. The blocks can be shared by
+    any experiment composition; they do not belong to a frequency or forcing
+    direction pilot.
+    """
+    initial = config["initial_ensemble"]
+    proposal_config = initial["proposal"]
+    proposal = SymmetricXYUniformProposal(
+        x_half_width=proposal_config["x_half_width"],
+        y_half_width=proposal_config["y_half_width"],
+        z_bounds=tuple(proposal_config["z_bounds"]),
+    )
+    block_id_start = int(initial["block_id_start"])
+    block_count = int(config["block_count"])
+    block_ids = tuple(range(block_id_start, block_id_start + block_count))
+    numerical_config = {
+        "lorenz": dict(config["lorenz"]),
+        "solver": dict(config["solver"]),
+    }
+    return generate_initial_state_blocks(
+        block_ids,
+        initial["root_entropy"],
+        proposal,
+        float(initial["spinup_time"]),
+        numerical_config,
+    )

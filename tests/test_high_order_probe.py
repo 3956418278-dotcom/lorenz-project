@@ -1,15 +1,6 @@
-import importlib.util
-from pathlib import Path
-
 import numpy as np
 
-
-REPO = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "run_high_order_probe", REPO / "experiments/run_high_order_probe.py"
-)
-probe = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(probe)
+from lorenz import high_order_probe as probe
 
 
 def _design():

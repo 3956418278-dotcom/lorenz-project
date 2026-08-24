@@ -70,6 +70,11 @@ def _fake_blocks(config):
         root_entropy=initial["root_entropy"],
         root_spawn_key=(0,),
         bit_generator="PCG64DXSM",
+        proposal=SimpleNamespace(
+            x_half_width=initial["proposal"]["x_half_width"],
+            y_half_width=initial["proposal"]["y_half_width"],
+            z_bounds=tuple(initial["proposal"]["z_bounds"]),
+        ),
         spinup_time=float(initial["spinup_time"]),
     )
 
@@ -79,7 +84,7 @@ def test_chunked_generation_persists_and_reloads_block_level_objects(
 ):
     config = _config()
     monkeypatch.setattr(
-        pilot, "generate_initial_state_blocks",
+        pilot, "generate_configured_initial_state_blocks",
         lambda *args, **kwargs: _fake_blocks(config),
     )
     output_dir = tmp_path / "artifact"
@@ -179,7 +184,7 @@ def test_resume_reuses_completed_frequency_chunks(tmp_path, monkeypatch):
     config = _config()
     config["output_root"] = str(tmp_path / "run")
     monkeypatch.setattr(
-        pilot, "generate_initial_state_blocks",
+        pilot, "generate_configured_initial_state_blocks",
         lambda *args, **kwargs: _fake_blocks(config),
     )
     output_dir, manifest, _ = pilot.run_x_response_pilot(

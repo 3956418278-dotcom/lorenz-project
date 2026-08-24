@@ -132,6 +132,11 @@
   and immutable extension artifacts. Extension runs merge new strengths onto a
   canonical condition axis and require an exact redundant-unforced check against
   their base artifact before inference.
+- Durable high-order probe behavior is owned by
+  `src/lorenz/high_order_probe.py`; `experiments/run_high_order_probe.py` is a
+  thin configured entry point. Shared run-config-to-initial-block composition
+  is owned by `src/lorenz/ensemble.py`, so the probe no longer depends on the
+  x-response pilot for generic ensemble generation.
 - Figure-A-style diagnostics are generated as one three-panel `x | y | z`
   figure per direction and strength. They show the coherent odd/even spectra,
   whole-block-resampled ensemble noise, single-block chaotic-background bands,

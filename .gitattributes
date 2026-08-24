@@ -1,0 +1,10 @@
+*.json text eol=lf
+*.m text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+
+*.mat binary
+*.mlx binary
+*.npy binary
+*.pdf binary
