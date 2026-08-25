@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "study_id": "single_axis_coefficients_omega_5p938_h5_h6_h7_v1",
+  "classification": "single_axis_coefficient_amplitude_gap_v1",
+  "output_root": "outputs/production/single_axis_coefficients_omega_5p938_h5_h6_h7_v1",
+  "runner_path": "src/lorenz/high_order_probe.py",
+  "omega": 5.938,
+  "strengths": [5.0, 6.0, 7.0],
+  "block_count": 256,
+  "workers": 8,
+  "discard_time": 160.0,
+  "n_phase": 32,
+  "harmonics": [0, 1, 2, 3, 4, 5],
+  "observation_rule": {
+    "minimum_cycles": 64,
+    "minimum_physical_time": 400.0
+  },
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-09,
+    "atol": 1e-11
+  },
+  "initial_ensemble": {
+    "root_entropy": 2026081603,
+    "block_id_start": 2700000,
+    "spinup_time": 40.0,
+    "proposal": {
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [0.0, 50.0]
+    }
+  },
+  "protocol": {
+    "status": "single-axis coefficient amplitude-gap completion",
+    "directions": [
+      [1.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0],
+      [0.0, 0.0, 1.0]
+    ],
+    "phase": 0.0
+  },
+  "dense": {
+    "dt": 0.05,
+    "n_theta_bins": 256,
+    "welch_segment": 512,
+    "max_psd_bins": 256,
+    "raw_segment_blocks": 2,
+    "raw_segment_samples": 1200,
+    "spectrum_max_omega": null,
+    "spectrum_harmonic_cap": 5.0
+  },
+  "retention": {
+    "per_cycle_fourier_blocks": 64,
+    "phase_samples_blocks": 0,
+    "dense_trajectory_blocks": 0,
+    "block_spectra": true,
+    "chunk_blocks": 32
+  },
+  "inference": {
+    "confidence": 0.95,
+    "fdr_alpha": 0.05
+  }
+}
