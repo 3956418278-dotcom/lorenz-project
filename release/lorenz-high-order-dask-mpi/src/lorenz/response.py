@@ -141,6 +141,37 @@ def directional_frequency_response(
     )
 
 
+def mirrored_phase_pair_second_order(
+    z_plus, z_minus, first_amplitude: float, second_amplitude: float
+) -> dict[str, np.ndarray]:
+    """Separate a mirrored phase pair into mixed and diagonal channels.
+
+    ``z_plus`` uses component phases ``(+pi/4, -pi/4)`` and ``z_minus``
+    uses ``(-pi/4, +pi/4)``.  Under the repository Taylor convention
+    the symmetric contraction.  With sine forcing and stored Fourier
+    coefficient ``Z=mean(x*exp(-2j*theta))``, the repository's no-factorial
+    Volterra coefficient is ``chi2_jk=-2*Z_cross_raw/(a_j*a_k)``.  The Taylor
+    Hessian convention ``M=M0+L*a+1/2*H:a*a`` is ``H_jk=2*chi2_jk``.
+    """
+    z_plus = np.asarray(z_plus)
+    z_minus = np.asarray(z_minus)
+    if z_plus.shape != z_minus.shape:
+        raise ValueError("mirrored phase-pair arrays must have equal shapes")
+    amplitudes = np.asarray((first_amplitude, second_amplitude), dtype=float)
+    if not np.isfinite(amplitudes).all() or np.any(amplitudes <= 0):
+        raise ValueError("mixed component amplitudes must be finite and positive")
+    cross_raw = (z_plus + z_minus) / 2
+    diagonal_difference = (z_plus - z_minus) / 2
+    normalized = cross_raw / float(np.prod(amplitudes))
+    return {
+        "cross_raw": cross_raw,
+        "diagonal_difference": diagonal_difference,
+        "cross_normalized": normalized,
+        "second_order": -2 * normalized,
+        "taylor_hessian": -4 * normalized,
+    }
+
+
 def _checked_direction_problem(directions, responses):
     directions = np.asarray(directions, dtype=float)
     responses = np.asarray(responses)

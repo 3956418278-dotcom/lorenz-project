@@ -238,7 +238,12 @@ def single_frequency_strength_config(config: dict, omega: float, n_cycle: int) -
 
 
 def _integrate_cycle_fourier(arguments):
-    initial_state, forcing, sampling, numerical_config = arguments
+    if len(arguments) == 4:
+        initial_state, forcing, sampling, numerical_config = arguments
+        forcing_phases = None
+    else:
+        initial_state, forcing, forcing_phases, sampling, numerical_config = arguments
+    phase_options = {} if forcing_phases is None else {"forcing_phases": forcing_phases}
     samples = simulate_phase_samples(
         initial_state,
         forcing,
@@ -248,18 +253,25 @@ def _integrate_cycle_fourier(arguments):
         sampling.n_cycle,
         sampling.n_phase,
         numerical_config,
+        **phase_options,
     )
     return phase_fourier(samples.values, sampling.harmonics, samples.phase_offset)
 
 
 def _integrate_cycle_fourier_block(arguments):
     """Run every condition for one block inside one execution task."""
-    initial_state, forcing_vectors, sampling, numerical_config = arguments
+    if len(arguments) == 4:
+        initial_state, forcing_vectors, sampling, numerical_config = arguments
+        forcing_phases = [None] * len(forcing_vectors)
+    else:
+        initial_state, forcing_vectors, forcing_phases, sampling, numerical_config = arguments
     return tuple(
         _integrate_cycle_fourier(
             (initial_state, forcing, sampling, numerical_config)
+            if phases is None else
+            (initial_state, forcing, phases, sampling, numerical_config)
         )
-        for forcing in forcing_vectors
+        for forcing, phases in zip(forcing_vectors, forcing_phases)
     )
 
 
@@ -270,6 +282,7 @@ def integrate_cycle_fourier_conditions(
     sampling: CycleFourierSampling,
     numerical_config: dict,
     *,
+    forcing_phases=None,
     workers: int = 1,
 ) -> np.ndarray:
     """Integrate a block-by-condition design into cycle Fourier summaries.
@@ -295,8 +308,16 @@ def integrate_cycle_fourier_conditions(
         raise ValueError("forcing_vectors must have finite axes condition,state")
     if not isinstance(sampling, CycleFourierSampling):
         raise TypeError("sampling must be a CycleFourierSampling")
+    if forcing_phases is None:
+        condition_phases = [None] * len(forcing_vectors)
+    else:
+        condition_phases = np.asarray(forcing_phases, dtype=float)
+        if condition_phases.shape != forcing_vectors.shape or not np.isfinite(condition_phases).all():
+            raise ValueError("forcing_phases must have finite axes condition,state")
     tasks = [
         (initial_states[block_index], forcing_vectors, sampling, numerical_config)
+        if forcing_phases is None else
+        (initial_states[block_index], forcing_vectors, condition_phases, sampling, numerical_config)
         for block_index in range(len(block_ids))
     ]
     integrated_blocks = map_tasks(
@@ -679,7 +700,12 @@ def dense_block_spectrum(
 
 
 def _integrate_phase_and_dense(arguments):
-    initial_state, forcing, sampling, dense_config, numerical_config = arguments
+    if len(arguments) == 5:
+        initial_state, forcing, sampling, dense_config, numerical_config = arguments
+        forcing_phases = None
+    else:
+        initial_state, forcing, forcing_phases, sampling, dense_config, numerical_config = arguments
+    phase_options = {} if forcing_phases is None else {"forcing_phases": forcing_phases}
     phase_samples, dense_values, dense_times = simulate_phase_and_dense(
         initial_state,
         forcing,
@@ -690,6 +716,7 @@ def _integrate_phase_and_dense(arguments):
         sampling.n_phase,
         dense_config["dt"],
         numerical_config,
+        **phase_options,
     )
     fourier = phase_fourier(
         phase_samples.values, sampling.harmonics, phase_samples.phase_offset
@@ -720,12 +747,21 @@ def _integrate_phase_and_dense(arguments):
 
 def _integrate_phase_and_dense_block(arguments):
     """Run every dense-output condition for one block in condition order."""
-    initial_state, forcing_vectors, sampling, dense_config, numerical_config = arguments
+    if len(arguments) == 5:
+        initial_state, forcing_vectors, sampling, dense_config, numerical_config = arguments
+        forcing_phases = [None] * len(forcing_vectors)
+    else:
+        (
+            initial_state, forcing_vectors, forcing_phases, sampling,
+            dense_config, numerical_config,
+        ) = arguments
     return tuple(
         _integrate_phase_and_dense(
             (initial_state, forcing, sampling, dense_config, numerical_config)
+            if phases is None else
+            (initial_state, forcing, phases, sampling, dense_config, numerical_config)
         )
-        for forcing in forcing_vectors
+        for forcing, phases in zip(forcing_vectors, forcing_phases)
     )
 
 
@@ -737,6 +773,7 @@ def integrate_phase_and_dense_conditions(
     dense_config: dict,
     numerical_config: dict,
     *,
+    forcing_phases=None,
     workers: int = 1,
     raw_segment_blocks: int = 0,
     retain_phase_samples: bool = False,
@@ -780,6 +817,12 @@ def integrate_phase_and_dense_conditions(
         raise ValueError("forcing_vectors must have finite axes condition,state")
     if not isinstance(sampling, CycleFourierSampling):
         raise TypeError("sampling must be a CycleFourierSampling")
+    if forcing_phases is None:
+        condition_phases = [None] * len(forcing_vectors)
+    else:
+        condition_phases = np.asarray(forcing_phases, dtype=float)
+        if condition_phases.shape != forcing_vectors.shape or not np.isfinite(condition_phases).all():
+            raise ValueError("forcing_phases must have finite axes condition,state")
     if raw_segment_blocks < 0 or raw_segment_blocks > len(block_ids):
         raise ValueError("raw_segment_blocks must lie within the block axis")
     if retain_dense_blocks < 0 or retain_dense_blocks > len(block_ids):
@@ -791,6 +834,7 @@ def integrate_phase_and_dense_conditions(
         (
             initial_states[block_index],
             forcing_vectors,
+            condition_phases,
             sampling,
             {
                 **dense_config,
@@ -806,6 +850,12 @@ def integrate_phase_and_dense_conditions(
         )
         for block_index in range(len(block_ids))
     ]
+    if forcing_phases is None:
+        tasks = [
+            (initial_state, vectors, sampling, dense_options, numerical_config)
+            for initial_state, vectors, _, sampling, dense_options, numerical_config
+            in tasks
+        ]
     integrated_blocks = map_tasks(
         _integrate_phase_and_dense_block, tasks, workers=workers
     )

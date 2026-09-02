@@ -12,6 +12,7 @@ from lorenz.retention import (
     condition_labels,
     condition_table,
     load_spectrum_conditions,
+    mirrored_phase_pair_conditions,
     paired_condition_indices,
     paired_condition_vectors,
     parse_retention_policy,
@@ -87,6 +88,22 @@ def test_paired_condition_axis_owns_lookup_and_reordering():
     source = canonical[[0, 3, 4, 1, 2, 7, 8, 5, 6]]
     permutation = condition_axis_permutation(source, canonical)
     np.testing.assert_array_equal(source[permutation], canonical)
+
+
+def test_mirrored_phase_pair_conditions_store_unequal_amplitudes_and_phases():
+    plan = mirrored_phase_pair_conditions(
+        [[1, 1, 0]], ["xy"], [[[2.0, 3.0]]], reference_phase=0.2
+    )
+    np.testing.assert_array_equal(plan["forcing_vectors"], [[0, 0, 0], [2, 3, 0], [2, 3, 0]])
+    assert not np.array_equal(plan["forcing_phases"][1], plan["forcing_phases"][2])
+    np.testing.assert_allclose(
+        plan["forcing_phases"][1, :2], [0.2 + np.pi / 4, 0.2 - np.pi / 4]
+    )
+    np.testing.assert_allclose(
+        plan["forcing_phases"][2, :2], [0.2 - np.pi / 4, 0.2 + np.pi / 4]
+    )
+    assert plan["pairs"][0]["mirror_plus_index"] == 1
+    assert plan["pairs"][0]["mirror_minus_index"] == 2
 
 
 def test_selected_spectrum_conditions_load_across_chunks(tmp_path):

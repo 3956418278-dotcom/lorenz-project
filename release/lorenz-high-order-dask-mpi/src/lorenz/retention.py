@@ -235,6 +235,81 @@ def paired_direction_strength_vectors(
     return np.asarray(vectors, dtype=float)
 
 
+def mirrored_phase_pair_conditions(
+    directions,
+    direction_names,
+    amplitude_pairs_by_direction,
+    *,
+    reference_phase: float = 0.0,
+    phase_offset: float = np.pi / 4,
+) -> dict:
+    """Build unforced/P+/P- conditions for two-axis phase-pair probes."""
+    directions = np.asarray(directions, dtype=float)
+    names = tuple(str(value) for value in direction_names)
+    if (
+        directions.ndim != 2
+        or directions.shape[1] != 3
+        or not np.isfinite(directions).all()
+        or len(names) != len(directions)
+        or len(set(names)) != len(names)
+    ):
+        raise ValueError("mixed directions and unique names must share a finite direction axis")
+    if len(amplitude_pairs_by_direction) != len(directions):
+        raise ValueError("amplitude pairs must match the direction axis")
+    if not np.isfinite(reference_phase) or not np.isfinite(phase_offset):
+        raise ValueError("mixed forcing phases must be finite")
+
+    vectors = [np.zeros(3, dtype=float)]
+    phases = [np.full(3, reference_phase, dtype=float)]
+    labels = ["unforced"]
+    records = []
+    axis_names = ("x", "y", "z")
+    for direction, name, configured_pairs in zip(
+        directions, names, amplitude_pairs_by_direction
+    ):
+        active = np.flatnonzero(direction != 0)
+        if len(active) != 2 or not np.all(direction[active] == 1.0):
+            raise ValueError("each mixed direction must select exactly two axes with value 1")
+        pairs = np.asarray(configured_pairs, dtype=float)
+        if (
+            pairs.ndim != 2
+            or pairs.shape[1] != 2
+            or not len(pairs)
+            or not np.isfinite(pairs).all()
+            or np.any(pairs <= 0)
+            or len(np.unique(pairs, axis=0)) != len(pairs)
+        ):
+            raise ValueError("each mixed direction requires unique positive amplitude pairs")
+        for pair in pairs:
+            vector = np.zeros(3, dtype=float)
+            vector[active] = pair
+            plus_phase = np.full(3, reference_phase, dtype=float)
+            minus_phase = np.full(3, reference_phase, dtype=float)
+            plus_phase[active] = reference_phase + np.array((phase_offset, -phase_offset))
+            minus_phase[active] = reference_phase + np.array((-phase_offset, phase_offset))
+            plus_index = len(vectors)
+            vectors.extend((vector.copy(), vector.copy()))
+            phases.extend((plus_phase, minus_phase))
+            pair_label = f"{name}:{pair[0]:g},{pair[1]:g}"
+            labels.extend((f"{pair_label}:P+", f"{pair_label}:P-"))
+            records.append(
+                {
+                    "name": name,
+                    "axes": [axis_names[index] for index in active],
+                    "axis_indices": active.tolist(),
+                    "amplitudes": pair.tolist(),
+                    "mirror_plus_index": plus_index,
+                    "mirror_minus_index": plus_index + 1,
+                }
+            )
+    return {
+        "forcing_vectors": np.asarray(vectors, dtype=float),
+        "forcing_phases": np.asarray(phases, dtype=float),
+        "condition_labels": tuple(labels),
+        "pairs": records,
+    }
+
+
 def condition_index(forcing_vectors, target, *, atol: float = 1e-9) -> int:
     """Return the unique condition-axis index matching a forcing vector."""
     forcing_vectors = np.asarray(forcing_vectors, dtype=float)

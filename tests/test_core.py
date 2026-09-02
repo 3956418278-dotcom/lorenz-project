@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from lorenz.core import _forcing_angle, phase_mean, simulate_phase_samples
+from lorenz.core import _forcing_angle, lorenz_rhs, phase_mean, simulate_phase_samples
 
 
 @pytest.fixture
@@ -62,6 +62,22 @@ def test_phase_metadata_uses_the_same_large_time_expression_as_rhs():
 
     assert expected != nested_mod
     assert expected == np.mod(_forcing_angle(sample_time, omega, phase), 2 * np.pi)
+
+
+def test_vector_forcing_phases_preserve_scalar_path_and_apply_per_axis(cfg):
+    state = np.array((1.0, 2.0, 3.0))
+    forcing = np.array((2.0, 3.0, 4.0))
+    scalar = lorenz_rhs(0.25, state, cfg, forcing, 5.0, 0.3)
+    repeated = lorenz_rhs(0.25, state, cfg, forcing, 5.0, np.full(3, 0.3))
+    np.testing.assert_array_equal(scalar, repeated)
+
+    phases = np.array((np.pi / 4, -np.pi / 4, 0.1))
+    unforced = np.asarray(lorenz_rhs(0.25, state, cfg), dtype=float)
+    expected_forcing = forcing * np.sin(5.0 * 0.25 + phases)
+    np.testing.assert_allclose(
+        np.asarray(lorenz_rhs(0.25, state, cfg, forcing, 5.0, phases)) - unforced,
+        expected_forcing,
+    )
 
 
 def test_zero_time_single_sample_returns_initial_state(cfg):

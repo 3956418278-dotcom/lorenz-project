@@ -11,8 +11,9 @@ block-condition integration functions to Dask workers.
 With 48 MPI ranks, rank 0 is the scheduler, rank 1 is the client, and the
 remaining 46 ranks are one-thread workers.
 
-The package includes one remote-production configuration:
-`configs/production/single_axis_coefficients_omega_5p938_y_h1_h2_h3_h4_z_h2_h3_h4_h5_b32768_v1.json`.
+The package includes the completed-lineage single-axis configuration and a
+separate mirrored phase-pair configuration:
+`configs/production/mixed_phase_pairs_omega_5p938_b32768_v1.json`.
 No config from a completed local experiment is included.
 
 ## Upload and install
@@ -33,12 +34,12 @@ the environment as required by the site.
 
 ## Run
 
-Pass the included new production configuration explicitly. The launcher never
+Pass the required production configuration explicitly. The launcher never
 selects an old experiment implicitly:
 
 ```bash
-./run.sh configs/production/single_axis_coefficients_omega_5p938_y_h1_h2_h3_h4_z_h2_h3_h4_h5_b32768_v1.json
-./run.sh configs/production/single_axis_coefficients_omega_5p938_y_h1_h2_h3_h4_z_h2_h3_h4_h5_b32768_v1.json \
+./run.sh configs/production/mixed_phase_pairs_omega_5p938_b32768_v1.json
+./run.sh configs/production/mixed_phase_pairs_omega_5p938_b32768_v1.json \
   --resume outputs/production/<artifact-directory>
 ```
 
@@ -52,7 +53,7 @@ Set `NPROC` or `PYTHON_BIN` to override the rank count or interpreter. Use
 `--dry-run` to validate the configuration and MPI startup without integrating:
 
 ```bash
-./run.sh configs/production/single_axis_coefficients_omega_5p938_y_h1_h2_h3_h4_z_h2_h3_h4_h5_b32768_v1.json --dry-run
+./run.sh configs/production/mixed_phase_pairs_omega_5p938_b32768_v1.json --dry-run
 ```
 
 Generated scientific artifacts are written under `outputs/`; Dask and
@@ -62,8 +63,8 @@ inside `src/`.
 ## Included runtime surface
 
 - the `lorenz.high_order_probe` package dependency closure;
-- the `omega=5.938`, y `h={1,2,3,4}`, z `h={2,3,4,5}`, `B=32768`
-  production configuration;
+- the existing single-axis configuration and the `omega=5.938`, `xy/xz/yz`,
+  mirrored-phase, `B=32768` production configuration;
 - NumPy, SciPy, Matplotlib, Dask/Distributed, dask-mpi, and mpi4py environment
   declarations.
 

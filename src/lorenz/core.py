@@ -35,8 +35,15 @@ def lorenz_rhs(t, state, cfg, forcing=None, omega=0.0, phase=0.0):
     beta = cfg["lorenz"]["beta"]
     fx = fy = fz = 0.0
     if forcing is not None:
-        f = np.sin(_forcing_angle(t, omega, phase))
-        fx, fy, fz = np.asarray(forcing, dtype=float) * f
+        forcing = np.asarray(forcing, dtype=float)
+        phases = np.asarray(phase, dtype=float)
+        if phases.ndim == 0:
+            values = forcing * np.sin(_forcing_angle(t, omega, float(phases)))
+        elif phases.shape == (3,) and np.isfinite(phases).all():
+            values = forcing * np.sin(_forcing_angle(t, omega, phases))
+        else:
+            raise ValueError("phase must be a finite scalar or three-vector")
+        fx, fy, fz = values
     return [
         sigma * (y - x) + fx,
         rho * x - y - x * z + fy,
@@ -72,6 +79,8 @@ def simulate_phase_samples(
     n_cycle: int,
     n_phase: int,
     cfg: dict,
+    *,
+    forcing_phases=None,
 ) -> PhaseSamples:
     """Integrate from forcing onset and retain a cycle-resolved phase grid.
 
@@ -90,6 +99,9 @@ def simulate_phase_samples(
         raise ValueError("omega must be finite and positive")
     if not np.isfinite(phase):
         raise ValueError("phase must be finite")
+    rhs_phase = phase if forcing_phases is None else np.asarray(forcing_phases, dtype=float)
+    if np.asarray(rhs_phase).shape not in ((), (3,)) or not np.isfinite(rhs_phase).all():
+        raise ValueError("forcing_phases must be a finite three-vector")
     if not np.isfinite(discard_time) or discard_time < 0:
         raise ValueError("discard_time must be finite and nonnegative")
     n_cycle = _positive_count(n_cycle, "n_cycle")
@@ -114,7 +126,7 @@ def simulate_phase_samples(
     else:
         sol = solve_ivp(
             lambda t, state: lorenz_rhs(
-                t, state, cfg, forcing_vector, omega, phase
+                t, state, cfg, forcing_vector, omega, rhs_phase
             ),
             [0.0, float(flat_times[-1])],
             initial_state,
@@ -186,6 +198,8 @@ def simulate_phase_and_dense(
     n_phase: int,
     dense_dt: float,
     cfg: dict,
+    *,
+    forcing_phases=None,
 ):
     """Integrate once and return phase-grid samples plus dense fixed-dt samples.
 
@@ -205,6 +219,9 @@ def simulate_phase_and_dense(
         raise ValueError("omega must be finite and positive")
     if not np.isfinite(phase):
         raise ValueError("phase must be finite")
+    rhs_phase = phase if forcing_phases is None else np.asarray(forcing_phases, dtype=float)
+    if np.asarray(rhs_phase).shape not in ((), (3,)) or not np.isfinite(rhs_phase).all():
+        raise ValueError("forcing_phases must be a finite three-vector")
     if not np.isfinite(discard_time) or discard_time < 0:
         raise ValueError("discard_time must be finite and nonnegative")
     if not np.isfinite(dense_dt) or dense_dt <= 0:
@@ -226,7 +243,7 @@ def simulate_phase_and_dense(
     else:
         sol = solve_ivp(
             lambda t, state: lorenz_rhs(
-                t, state, cfg, forcing_vector, omega, phase
+                t, state, cfg, forcing_vector, omega, rhs_phase
             ),
             [0.0, float(merged[-1])],
             initial_state,

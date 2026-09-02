@@ -6,6 +6,7 @@ from lorenz.response import (
     directional_frequency_response,
     effective_phase_responses,
     harmonic_order_contrast,
+    mirrored_phase_pair_second_order,
     monochromatic_quadratic_design,
     paired_order_contrasts,
     phase_fourier,
@@ -42,6 +43,20 @@ def test_paired_contrasts_isolate_linear_and_quadratic_terms():
     np.testing.assert_allclose(second, quadratic)
     np.testing.assert_array_equal(harmonic_order_contrast(odd, even, 3), odd)
     np.testing.assert_array_equal(harmonic_order_contrast(odd, even, 4), even)
+
+
+def test_mirrored_phase_pair_recovers_sum_difference_and_mixed_factor():
+    expected_normalized = np.array((1.5 - 0.25j, -2.0 + 3.0j))
+    diagonal = np.array((0.3 + 0.2j, -0.4j))
+    cross_raw = expected_normalized * (2.0 * 3.0)
+    result = mirrored_phase_pair_second_order(
+        cross_raw + diagonal, cross_raw - diagonal, 2.0, 3.0
+    )
+    np.testing.assert_allclose(result["cross_raw"], cross_raw)
+    np.testing.assert_allclose(result["diagonal_difference"], diagonal)
+    np.testing.assert_allclose(result["cross_normalized"], expected_normalized)
+    np.testing.assert_allclose(result["second_order"], -2 * expected_normalized)
+    np.testing.assert_allclose(result["taylor_hessian"], -4 * expected_normalized)
 
 
 def test_extracts_susceptibilities_with_sine_and_no_factorial_convention():

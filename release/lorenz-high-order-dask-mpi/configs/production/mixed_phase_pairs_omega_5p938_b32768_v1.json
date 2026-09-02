@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "study_id": "mixed_phase_pairs_omega_5p938_b32768_v1",
+  "classification": "mixed_phase_pair_production_v1",
+  "output_root": "outputs/production/mixed_phase_pairs_omega_5p938_b32768_v1",
+  "runner_path": "src/lorenz/high_order_probe.py",
+  "omega": 5.938,
+  "strengths": [3.0, 4.0],
+  "strengths_by_direction": {
+    "xy": [[4.0, 4.0]],
+    "xz": [[4.0, 3.0]],
+    "yz": [[4.0, 3.0]]
+  },
+  "block_count": 32768,
+  "workers": 8,
+  "discard_time": 160.0,
+  "n_phase": 32,
+  "harmonics": [0, 1, 2, 3, 4, 5],
+  "observation_rule": {"minimum_cycles": 64, "minimum_physical_time": 400.0},
+  "lorenz": {"sigma": 10.0, "rho": 28.0, "beta": 2.6666666666666665},
+  "solver": {"method": "DOP853", "rtol": 1e-09, "atol": 1e-11},
+  "initial_ensemble": {
+    "root_entropy": 2026081603,
+    "block_id_start": 2700000,
+    "spinup_time": 40.0,
+    "proposal": {
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [0.0, 50.0]
+    }
+  },
+  "protocol": {
+    "status": "mirrored phase-pair mixed-term production",
+    "direction_names": ["xy", "xz", "yz"],
+    "directions": [[1.0, 1.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0]],
+    "phase": 0.0
+  },
+  "dense": {
+    "dt": 0.05,
+    "n_theta_bins": 256,
+    "welch_segment": 512,
+    "max_psd_bins": 256,
+    "raw_segment_blocks": 0,
+    "raw_segment_samples": 1200,
+    "spectrum_max_omega": null,
+    "spectrum_harmonic_cap": 5.0
+  },
+  "retention": {
+    "per_cycle_fourier_blocks": 0,
+    "phase_samples_blocks": 0,
+    "dense_trajectory_blocks": 0,
+    "spectrum_blocks": 0,
+    "chunk_blocks": 32
+  },
+  "inference": {"confidence": 0.95, "fdr_alpha": 0.05},
+  "generate_figures": false
+}

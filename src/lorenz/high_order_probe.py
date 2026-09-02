@@ -47,6 +47,7 @@ from .retention import (
     chunk_ranges,
     condition_axis_permutation,
     load_spectrum_conditions,
+    mirrored_phase_pair_conditions,
     paired_condition_indices,
     paired_condition_vectors,
     parse_retention_policy,
@@ -96,6 +97,40 @@ def validate_probe_config(config: dict) -> dict:
     for direction in directions:
         if direction.shape != (3,) or not np.isfinite(direction).all() or not np.any(direction):
             raise ValueError("each direction must be a finite nonzero vector")
+    configured_by_direction = config.get("strengths_by_direction")
+    if configured_by_direction is not None and not isinstance(configured_by_direction, dict):
+        raise ValueError("strengths_by_direction must be a mapping")
+    mixed_mode = configured_by_direction is not None and any(
+        np.asarray(value).ndim == 2 for value in configured_by_direction.values()
+    )
+    condition_plan = None
+    if mixed_mode:
+        names = config["protocol"].get("direction_names")
+        if not isinstance(names, list) or len(names) != len(directions):
+            raise ValueError("mixed probes require protocol.direction_names")
+        if set(configured_by_direction) != set(names):
+            raise ValueError(
+                "strengths_by_direction keys must match protocol.direction_names"
+            )
+        amplitude_pairs = [configured_by_direction[name] for name in names]
+        condition_plan = mirrored_phase_pair_conditions(
+            directions,
+            names,
+            amplitude_pairs,
+            reference_phase=float(config["protocol"].get("phase", 0.0)),
+        )
+        amplitude_union = np.unique(
+            np.concatenate([np.asarray(value, dtype=float).ravel() for value in amplitude_pairs])
+        )
+        if not np.array_equal(amplitude_union, strengths):
+            raise ValueError("strengths must be the sorted union of mixed amplitudes")
+        strengths_by_direction = amplitude_pairs
+    elif configured_by_direction is not None:
+        raise ValueError(
+            "root high_order_probe accepts strengths_by_direction only for mixed amplitude pairs"
+        )
+    else:
+        strengths_by_direction = [strengths.copy() for _ in directions]
     minimum_cycles = int(config["observation_rule"]["minimum_cycles"])
     minimum_time = float(config["observation_rule"]["minimum_physical_time"])
     if minimum_cycles < 1 or minimum_time <= 0:
@@ -120,10 +155,20 @@ def validate_probe_config(config: dict) -> dict:
     if not 0 < fdr_alpha < 1:
         raise ValueError("inference.fdr_alpha must lie strictly between zero and one")
     policy = parse_retention_policy(config, block_count)
+    generate_figures = config.get("generate_figures", True)
+    if not isinstance(generate_figures, bool):
+        raise ValueError("generate_figures must be true or false")
+    if mixed_mode and generate_figures:
+        raise ValueError("mixed phase-pair collection requires generate_figures=false")
+    if mixed_mode and config.get("extension") is not None:
+        raise ValueError("extension runs do not support mixed phase pairs")
     extension = _validate_extension_config(config, strengths)
     return {
         "omega": omega,
         "strengths": strengths,
+        "strengths_by_direction": strengths_by_direction,
+        "experiment_type": "mirrored_phase_pair" if mixed_mode else "paired_sign",
+        "condition_plan": condition_plan,
         "directions": directions,
         "block_count": block_count,
         "cycles": cycles,
@@ -131,6 +176,7 @@ def validate_probe_config(config: dict) -> dict:
         "retention_policy": policy,
         "confidence": confidence,
         "fdr_alpha": fdr_alpha,
+        "generate_figures": generate_figures,
         "extension": extension,
     }
 
@@ -186,7 +232,10 @@ def probe_task_counts(checked: dict) -> dict:
             "conditions_per_block": integrated_conditions,
             "combined_conditions_per_block": combined_conditions,
         }
-    conditions = 1 + 2 * len(checked["strengths"]) * len(checked["directions"])
+    if checked["experiment_type"] == "mirrored_phase_pair":
+        conditions = len(checked["condition_plan"]["forcing_vectors"])
+    else:
+        conditions = 1 + 2 * len(checked["strengths"]) * len(checked["directions"])
     return {
         "unforced_trajectories": checked["block_count"],
         "forced_trajectories": checked["block_count"] * (conditions - 1),
@@ -304,13 +353,22 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
     unforced trajectory per block, persisting the retained block-level
     objects and returning the per-condition cycle means."""
     omega = checked["omega"]
-    strengths = checked["strengths"]
     directions = checked["directions"]
     block_count = checked["block_count"]
     workers = int(config.get("workers", 1))
-    forcing_vectors = paired_condition_vectors(
-        directions, strengths, include_unforced=True
-    )
+    condition_plan = checked["condition_plan"]
+    if condition_plan is None:
+        forcing_vectors = paired_condition_vectors(
+            directions, checked["strengths"], include_unforced=True
+        )
+        forcing_phases = None
+        labels = None
+        mixed_pairs = []
+    else:
+        forcing_vectors = condition_plan["forcing_vectors"]
+        forcing_phases = condition_plan["forcing_phases"]
+        labels = condition_plan["condition_labels"]
+        mixed_pairs = condition_plan["pairs"]
     condition_count = len(forcing_vectors)
     sampling = CycleFourierSampling(
         omega=omega,
@@ -365,6 +423,7 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
             sampling,
             dense_config,
             numerical_config,
+            forcing_phases=forcing_phases,
             workers=workers,
             raw_segment_blocks=chunk_raw,
             retain_phase_samples=False,
@@ -415,6 +474,9 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
     return {
         "means": means,
         "condition_vectors": forcing_vectors,
+        "condition_phases": forcing_phases,
+        "condition_labels": labels,
+        "mixed_pairs": mixed_pairs,
         "directions": directions,
     }
 
@@ -963,7 +1025,29 @@ def run_probe(config_path, resume_dir=None):
         f"{prefix}_strengths": checked["strengths"],
         f"{prefix}_harmonics": np.asarray(checked["harmonics"], dtype=int),
     }
+    if cell.get("condition_phases") is not None:
+        checkpoint[f"{prefix}_condition_phases"] = cell["condition_phases"]
+    if cell.get("condition_labels") is not None:
+        checkpoint[f"{prefix}_condition_labels"] = np.asarray(cell["condition_labels"])
     write_npz_atomic(checkpoint_dir / f"{prefix}.npz", checkpoint)
+    if checked["experiment_type"] == "mirrored_phase_pair":
+        write_json_atomic(output_dir / "derived_response_map.json", {
+            "experiment_type": "mirrored_phase_pair",
+            "convention": "mean(x exp(-i n theta)); cos = Re, sin = -Im",
+            "contrast_definition": (
+                "Z_cross_raw=(Z_plus+Z_minus)/2; "
+                "Z_diag_difference=(Z_plus-Z_minus)/2; "
+                "chi2_jk=-2*Z_cross_raw/(a_j*a_k); "
+                "Taylor H_jk=2*chi2_jk=-4*Z_cross_raw/(a_j*a_k)"
+            ),
+            "condition_amplitudes": cell["condition_vectors"].tolist(),
+            "condition_phases": cell["condition_phases"].tolist(),
+            "condition_labels": list(cell["condition_labels"]),
+            "mixed_pairs": cell["mixed_pairs"],
+            "harmonics": checked["harmonics"],
+        })
+        _write_probe_manifest(output_dir, config, config_path)
+        return output_dir
     entries = build_response_map(cell, checked)
     add_probe_q_values(entries, alpha=checked["fdr_alpha"])
     background, spectrum_grid = attach_background_scales(
@@ -1016,6 +1100,8 @@ def run_probe(config_path, resume_dir=None):
         ),
         "directions": [value.tolist() for value in checked["directions"]],
         "strengths": [float(value) for value in checked["strengths"]],
+        "strengths_by_direction": config.get("strengths_by_direction"),
+        "experiment_type": checked["experiment_type"],
         "harmonics": [0, 1, 2, 3, 4, 5],
         "response_map": entries,
     }
@@ -1066,6 +1152,11 @@ def run_probe(config_path, resume_dir=None):
         figure_dir,
         "spectrum_noise",
     )
+    _write_probe_manifest(output_dir, config, config_path, base_metadata)
+    return output_dir
+
+
+def _write_probe_manifest(output_dir, config, config_path, base_metadata=None):
     provenance = {
         "config_identifier": f"sha256:{file_sha256(config_path)}",
         "code_identifiers": active_source_identifiers(REPO_ROOT, "experiments/run_high_order_probe.py"),
@@ -1087,7 +1178,6 @@ def run_probe(config_path, resume_dir=None):
         "provenance": provenance,
     }
     write_json_atomic(output_dir / "manifest.json", manifest)
-    return output_dir
 
 
 def main() -> None:
@@ -1108,6 +1198,8 @@ def main() -> None:
         "omega": checked["omega"],
         "directions": len(checked["directions"]),
         "strengths": [float(value) for value in checked["strengths"]],
+        "strengths_by_direction": config.get("strengths_by_direction"),
+        "experiment_type": checked["experiment_type"],
         "block_count": checked["block_count"],
         "cycles": checked["cycles"],
         "conditions_per_block": counts["conditions_per_block"],

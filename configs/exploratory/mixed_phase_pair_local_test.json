@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "study_id": "mixed_phase_pair_local_test",
+  "classification": "mixed_phase_pair_local_test",
+  "output_root": "outputs/mixed_phase_pair_local_test",
+  "runner_path": "src/lorenz/high_order_probe.py",
+  "omega": 5.938,
+  "strengths": [1.0, 1.5, 2.0],
+  "strengths_by_direction": {
+    "xy": [[1.0, 2.0]],
+    "xz": [[2.0, 1.0]],
+    "yz": [[1.0, 1.5]]
+  },
+  "block_count": 3,
+  "workers": 1,
+  "discard_time": 1.0,
+  "n_phase": 16,
+  "harmonics": [0, 1, 2, 3, 4, 5],
+  "observation_rule": {
+    "minimum_cycles": 2,
+    "minimum_physical_time": 1.0
+  },
+  "lorenz": {"sigma": 10.0, "rho": 28.0, "beta": 2.6666666666666665},
+  "solver": {"method": "DOP853", "rtol": 1e-09, "atol": 1e-11},
+  "initial_ensemble": {
+    "root_entropy": 2026081603,
+    "block_id_start": 9900000,
+    "spinup_time": 1.0,
+    "proposal": {
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [0.0, 50.0]
+    }
+  },
+  "protocol": {
+    "status": "tiny mirrored phase-pair integration test",
+    "direction_names": ["xy", "xz", "yz"],
+    "directions": [[1.0, 1.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0]],
+    "phase": 0.0
+  },
+  "dense": {
+    "dt": 0.05,
+    "n_theta_bins": 32,
+    "welch_segment": 16,
+    "max_psd_bins": 8,
+    "raw_segment_blocks": 0,
+    "raw_segment_samples": 16,
+    "spectrum_max_omega": null,
+    "spectrum_harmonic_cap": 5.0
+  },
+  "retention": {
+    "per_cycle_fourier_blocks": "all",
+    "phase_samples_blocks": 0,
+    "dense_trajectory_blocks": 0,
+    "block_spectra": false,
+    "chunk_blocks": 3
+  },
+  "inference": {"confidence": 0.95, "fdr_alpha": 0.05},
+  "generate_figures": false
+}
