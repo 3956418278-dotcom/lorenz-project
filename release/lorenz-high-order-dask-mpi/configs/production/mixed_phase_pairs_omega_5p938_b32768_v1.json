@@ -5,11 +5,14 @@
   "output_root": "outputs/production/mixed_phase_pairs_omega_5p938_b32768_v1",
   "runner_path": "src/lorenz/high_order_probe.py",
   "omega": 5.938,
-  "strengths": [3.0, 4.0],
-  "strengths_by_direction": {
-    "xy": [[4.0, 4.0]],
-    "xz": [[4.0, 3.0]],
-    "yz": [[4.0, 3.0]]
+  "mixed_phase_pairs": {
+    "phase_offset": 0.7853981633974483,
+    "scales": [1.0, 1.25, 1.5, 1.75, 2.0],
+    "base_amplitudes": {
+      "xy": [4.0, 2.0],
+      "xz": [4.0, 2.5],
+      "yz": [2.0, 2.5]
+    }
   },
   "block_count": 32768,
   "workers": 8,

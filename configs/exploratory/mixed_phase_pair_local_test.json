@@ -5,11 +5,14 @@
   "output_root": "outputs/mixed_phase_pair_local_test",
   "runner_path": "src/lorenz/high_order_probe.py",
   "omega": 5.938,
-  "strengths": [1.0, 1.5, 2.0],
-  "strengths_by_direction": {
-    "xy": [[1.0, 2.0]],
-    "xz": [[2.0, 1.0]],
-    "yz": [[1.0, 1.5]]
+  "mixed_phase_pairs": {
+    "phase_offset": 0.7853981633974483,
+    "scales": [1.0, 1.25, 1.5, 1.75, 2.0],
+    "base_amplitudes": {
+      "xy": [4.0, 2.0],
+      "xz": [4.0, 2.5],
+      "yz": [2.0, 2.5]
+    }
   },
   "block_count": 3,
   "workers": 1,
@@ -33,7 +36,7 @@
     }
   },
   "protocol": {
-    "status": "tiny mirrored phase-pair integration test",
+    "status": "tiny five-scale mirrored phase-pair integration test",
     "direction_names": ["xy", "xz", "yz"],
     "directions": [[1.0, 1.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0]],
     "phase": 0.0

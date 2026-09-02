@@ -6,6 +6,7 @@ from lorenz.retention import (
     condition_index,
     paired_condition_vectors,
 )
+from lorenz.strength_series import power_series_operator
 
 
 def _design():
@@ -67,6 +68,64 @@ def test_probe_config_accepts_the_demonstrated_three_axis_design():
     checked = probe.validate_probe_config(config)
     assert len(checked["directions"]) == 3
     assert probe.probe_task_counts(checked)["conditions_per_block"] == 19
+
+
+def test_explicit_mixed_schema_builds_the_five_scale_condition_contract():
+    config = {
+        "omega": 5.938,
+        "block_count": 32768,
+        "discard_time": 160.0,
+        "n_phase": 32,
+        "harmonics": [0, 1, 2, 3, 4, 5],
+        "observation_rule": {"minimum_cycles": 64, "minimum_physical_time": 400.0},
+        "protocol": {
+            "directions": [[1, 1, 0], [1, 0, 1], [0, 1, 1]],
+            "direction_names": ["xy", "xz", "yz"],
+            "phase": 0.0,
+        },
+        "mixed_phase_pairs": {
+            "phase_offset": np.pi / 4,
+            "scales": [1.0, 1.25, 1.5, 1.75, 2.0],
+            "base_amplitudes": {
+                "xy": [4.0, 2.0], "xz": [4.0, 2.5], "yz": [2.0, 2.5]
+            },
+        },
+        "dense": {"dt": 0.05, "n_theta_bins": 32, "welch_segment": 16, "max_psd_bins": 8},
+        "retention": {"block_spectra": False},
+        "generate_figures": False,
+    }
+    checked = probe.validate_probe_config(config)
+    plan = checked["condition_plan"]
+    assert len(plan["forcing_vectors"]) == 31
+    assert probe.probe_task_counts(checked)["total_condition_integrations"] == 1_015_808
+    assert len(np.unique(np.column_stack((plan["forcing_vectors"], plan["forcing_phases"])), axis=0)) == 31
+    np.testing.assert_array_equal(plan["forcing_vectors"][1], [4.0, 2.0, 0.0])
+    np.testing.assert_array_equal(plan["forcing_vectors"][7], [7.0, 3.5, 0.0])
+    np.testing.assert_array_equal(plan["forcing_vectors"][21], [0.0, 2.0, 2.5])
+
+
+def test_mixed_bootstrap_keeps_mirror_pairs_on_the_same_block_draw():
+    block_effect = np.arange(8, dtype=float)[:, None, None]
+    signal = np.array([[2.0 + 3.0j, -1.0j]])
+    plus = signal + block_effect
+    minus = signal - block_effect
+    cross, difference = probe._paired_mirror_bootstrap_means(
+        plus, minus, resamples=40, seed=17
+    )
+    np.testing.assert_allclose(cross, np.broadcast_to(signal, cross.shape))
+    assert np.any(np.abs(difference) > 0)
+
+
+def test_mixed_scale_fit_and_minus_two_normalization_recover_chi2():
+    scales = np.array([1.0, 1.25, 1.5, 1.75, 2.0])
+    base_product = 4.0 * 2.5
+    expected_chi2 = 1.2 - 0.7j
+    leading_z = -0.5 * base_product * expected_chi2
+    values = leading_z * scales**2 + (0.3 + 0.1j) * scales**4
+    _, operator = power_series_operator(scales, (2, 4))
+    recovered_leading = (operator @ values)[0]
+    recovered_chi2 = -2 * recovered_leading / base_product
+    np.testing.assert_allclose(recovered_chi2, expected_chi2, atol=1e-13)
 
 
 def test_even_harmonic_uses_paired_unforced_subtraction():

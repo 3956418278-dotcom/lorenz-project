@@ -92,9 +92,12 @@ def test_paired_condition_axis_owns_lookup_and_reordering():
 
 def test_mirrored_phase_pair_conditions_store_unequal_amplitudes_and_phases():
     plan = mirrored_phase_pair_conditions(
-        [[1, 1, 0]], ["xy"], [[[2.0, 3.0]]], reference_phase=0.2
+        [[1, 1, 0]], ["xy"], [1.0, 1.5, 2.0], [[2.0, 3.0]], reference_phase=0.2
     )
-    np.testing.assert_array_equal(plan["forcing_vectors"], [[0, 0, 0], [2, 3, 0], [2, 3, 0]])
+    np.testing.assert_array_equal(
+        plan["forcing_vectors"],
+        [[0, 0, 0], [2, 3, 0], [2, 3, 0], [3, 4.5, 0], [3, 4.5, 0], [4, 6, 0], [4, 6, 0]],
+    )
     assert not np.array_equal(plan["forcing_phases"][1], plan["forcing_phases"][2])
     np.testing.assert_allclose(
         plan["forcing_phases"][1, :2], [0.2 + np.pi / 4, 0.2 - np.pi / 4]
@@ -104,6 +107,7 @@ def test_mirrored_phase_pair_conditions_store_unequal_amplitudes_and_phases():
     )
     assert plan["pairs"][0]["mirror_plus_index"] == 1
     assert plan["pairs"][0]["mirror_minus_index"] == 2
+    assert plan["pairs"][1]["scale"] == 1.5
 
 
 def test_selected_spectrum_conditions_load_across_chunks(tmp_path):

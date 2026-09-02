@@ -71,10 +71,13 @@ from .strength_study import (
     integrate_phase_and_dense_conditions,
     minimum_duration_cycle_count,
 )
+from .strength_series import power_series_operator
 from .ensemble import generate_configured_initial_state_blocks
 from .parallel import close_execution, initialize_execution
 
 BLOCK_LEVEL_DIRECTORY = "block_level"
+MIXED_BOOTSTRAP_REPLICATES = 300
+MIXED_BOOTSTRAP_SEED = 20260902
 UNFORCED_ALIGNMENT_RTOL = 1e-10
 UNFORCED_ALIGNMENT_ATOL = 1e-11
 EXTENSION_VALIDATION_ARRAYS = {
@@ -90,7 +93,6 @@ def validate_probe_config(config: dict) -> dict:
     omega = float(config["omega"])
     if not np.isfinite(omega) or omega <= 0:
         raise ValueError("omega must be finite and positive")
-    strengths = validate_strengths(config["strengths"], minimum_count=2)
     block_count = int(config["block_count"])
     if isinstance(block_count, bool) or block_count < 3:
         raise ValueError("block_count must be at least three")
@@ -101,52 +103,52 @@ def validate_probe_config(config: dict) -> dict:
         if direction.shape != (3,) or not np.isfinite(direction).all() or not np.any(direction):
             raise ValueError("each direction must be a finite nonzero vector")
     direction_labels = [direction_identity(direction)[0] for direction in directions]
+    mixed_config = config.get("mixed_phase_pairs")
     configured_by_direction = config.get("strengths_by_direction")
-    if configured_by_direction is not None and not isinstance(configured_by_direction, dict):
-        raise ValueError("strengths_by_direction must be a mapping")
-    mixed_mode = configured_by_direction is not None and any(
-        np.asarray(value).ndim == 2 for value in configured_by_direction.values()
-    )
+    if mixed_config is not None and configured_by_direction is not None:
+        raise ValueError("mixed_phase_pairs and strengths_by_direction are mutually exclusive")
     condition_plan = None
-    if mixed_mode:
+    if mixed_config is not None:
+        if not isinstance(mixed_config, dict):
+            raise ValueError("mixed_phase_pairs must be a mapping")
         names = config["protocol"].get("direction_names")
         if not isinstance(names, list) or len(names) != len(directions):
             raise ValueError("mixed probes require protocol.direction_names")
-        if set(configured_by_direction) != set(names):
-            raise ValueError(
-                "strengths_by_direction keys must match protocol.direction_names"
-            )
-        amplitude_pairs = [configured_by_direction[name] for name in names]
+        base_amplitudes = mixed_config.get("base_amplitudes")
+        if not isinstance(base_amplitudes, dict) or set(base_amplitudes) != set(names):
+            raise ValueError("mixed base_amplitudes must match protocol.direction_names")
+        scales = validate_strengths(mixed_config["scales"], minimum_count=3)
+        phase_offset = float(mixed_config["phase_offset"])
         condition_plan = mirrored_phase_pair_conditions(
             directions,
             names,
-            amplitude_pairs,
+            scales,
+            [base_amplitudes[name] for name in names],
             reference_phase=float(config["protocol"].get("phase", 0.0)),
+            phase_offset=phase_offset,
         )
-        amplitude_union = np.unique(
-            np.concatenate([np.asarray(value, dtype=float).ravel() for value in amplitude_pairs])
-        )
-        if not np.array_equal(amplitude_union, strengths):
-            raise ValueError("strengths must be the sorted union of mixed amplitudes")
-        strengths_by_direction = amplitude_pairs
-    elif configured_by_direction is None:
-        strengths_by_direction = [strengths.copy() for _ in directions]
+        strengths = scales
+        strengths_by_direction = None
     else:
-        if not isinstance(configured_by_direction, dict):
-            raise ValueError("strengths_by_direction must map direction labels to strengths")
-        if set(configured_by_direction) != set(direction_labels):
-            raise ValueError(
-                "strengths_by_direction keys must exactly match configured direction labels"
-            )
-        strengths_by_direction = [
-            validate_strengths(configured_by_direction[label], minimum_count=1)
-            for label in direction_labels
-        ]
-        strength_union = np.unique(np.concatenate(strengths_by_direction))
-        if not np.array_equal(strength_union, strengths):
-            raise ValueError(
-                "strengths must be the sorted union of strengths_by_direction"
-            )
+        strengths = validate_strengths(config["strengths"], minimum_count=2)
+        if configured_by_direction is None:
+            strengths_by_direction = [strengths.copy() for _ in directions]
+        else:
+            if not isinstance(configured_by_direction, dict):
+                raise ValueError("strengths_by_direction must map direction labels to strengths")
+            if set(configured_by_direction) != set(direction_labels):
+                raise ValueError(
+                    "strengths_by_direction keys must exactly match configured direction labels"
+                )
+            strengths_by_direction = [
+                validate_strengths(configured_by_direction[label], minimum_count=1)
+                for label in direction_labels
+            ]
+            strength_union = np.unique(np.concatenate(strengths_by_direction))
+            if not np.array_equal(strength_union, strengths):
+                raise ValueError(
+                    "strengths must be the sorted union of strengths_by_direction"
+                )
     minimum_cycles = int(config["observation_rule"]["minimum_cycles"])
     minimum_time = float(config["observation_rule"]["minimum_physical_time"])
     if minimum_cycles < 1 or minimum_time <= 0:
@@ -176,9 +178,10 @@ def validate_probe_config(config: dict) -> dict:
         raise ValueError("generate_figures must be true or false")
     if generate_figures and policy.spectrum_blocks == 0:
         raise ValueError("figure generation requires retained spectrum blocks")
+    mixed_mode = mixed_config is not None
     if mixed_mode and generate_figures:
         raise ValueError("mixed phase-pair collection requires generate_figures=false")
-    if configured_by_direction is not None and config.get("extension") is not None:
+    if (configured_by_direction is not None or mixed_mode) and config.get("extension") is not None:
         raise ValueError("extension runs do not support strengths_by_direction")
     extension = _validate_extension_config(config, strengths)
     return {
@@ -1063,6 +1066,281 @@ def build_detection_summary(entries, alpha=0.05):
     }
 
 
+def _signed_components(values):
+    values = np.asarray(values)
+    return np.stack((values.real, -values.imag), axis=-1)
+
+
+def _write_rows_csv(path: Path, rows: list[dict]) -> None:
+    if not rows:
+        raise ValueError("cannot write an empty mixed-analysis table")
+    stream = io.StringIO()
+    writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+    writer.writeheader()
+    writer.writerows(rows)
+    path.write_text(stream.getvalue(), encoding="utf-8", newline="")
+
+
+def _paired_mirror_bootstrap_means(plus, minus, *, resamples: int, seed: int):
+    """Resample whole blocks jointly and combine both mirrors per draw."""
+    plus = np.asarray(plus)
+    minus = np.asarray(minus)
+    if plus.shape != minus.shape or plus.ndim < 2 or plus.shape[0] < 2:
+        raise ValueError("mirror arrays must share a block axis with at least two blocks")
+    cross = np.empty((resamples, *plus.shape[1:]), dtype=complex)
+    difference = np.empty_like(cross)
+    seed_sequence = np.random.SeedSequence(seed)
+    rng = np.random.Generator(np.random.PCG64DXSM(seed_sequence))
+    for replicate in range(resamples):
+        indices = rng.integers(0, plus.shape[0], size=plus.shape[0])
+        plus_mean = plus[indices].mean(axis=0)
+        minus_mean = minus[indices].mean(axis=0)
+        cross[replicate] = (plus_mean + minus_mean) / 2
+        difference[replicate] = (plus_mean - minus_mean) / 2
+    return cross, difference
+
+
+def analyze_mixed_artifact(
+    artifact,
+    *,
+    bootstrap_replicates: int = MIXED_BOOTSTRAP_REPLICATES,
+    bootstrap_seed: int = MIXED_BOOTSTRAP_SEED,
+) -> Path:
+    """Read a completed mixed checkpoint and estimate zero-scale coefficients."""
+    artifact = Path(artifact).resolve()
+    config = json.loads((artifact / "config_snapshot.json").read_text(encoding="utf-8"))
+    checked = validate_probe_config(config)
+    if checked["experiment_type"] != "mirrored_phase_pair":
+        raise ValueError("artifact is not a mixed phase-pair experiment")
+    if isinstance(bootstrap_replicates, bool) or int(bootstrap_replicates) < 20:
+        raise ValueError("bootstrap_replicates must be at least 20")
+    bootstrap_replicates = int(bootstrap_replicates)
+    prefix = f"omega_{format(float(checked['omega']), '.12g').replace('-', 'm').replace('.', 'p')}"
+    checkpoint_path = artifact / "checkpoints" / f"{prefix}.npz"
+    with np.load(checkpoint_path, allow_pickle=False) as checkpoint:
+        block_ids = np.asarray(checkpoint[f"{prefix}_block_ids"], dtype=np.uint32)
+        means = np.asarray(checkpoint[f"{prefix}_condition_means"])
+        vectors = np.asarray(checkpoint[f"{prefix}_condition_vectors"], dtype=float)
+        phases = np.asarray(checkpoint[f"{prefix}_condition_phases"], dtype=float)
+        harmonics = np.asarray(checkpoint[f"{prefix}_harmonics"], dtype=int)
+    plan = checked["condition_plan"]
+    if not np.array_equal(vectors, plan["forcing_vectors"]):
+        raise ValueError("checkpoint component amplitudes differ from config metadata")
+    if not np.array_equal(phases, plan["forcing_phases"]):
+        raise ValueError("checkpoint component phases differ from config metadata")
+    expected = (len(block_ids), len(vectors), 3, len(harmonics))
+    if means.shape != expected or not np.iscomplexobj(means):
+        raise ValueError(f"condition means must have complex axes {expected}")
+    harmonic_indices = np.flatnonzero(harmonics == 2)
+    if len(harmonic_indices) != 1:
+        raise ValueError("mixed analysis requires harmonic n=2 exactly once")
+
+    names = tuple(config["protocol"]["direction_names"])
+    scales = np.asarray(config["mixed_phase_pairs"]["scales"], dtype=float)
+    records_by_name = {
+        name: [record for record in plan["pairs"] if record["name"] == name]
+        for name in names
+    }
+    if any(
+        [record["scale"] for record in records_by_name[name]] != scales.tolist()
+        for name in names
+    ):
+        raise ValueError("mixed condition records are not ordered by configured scale")
+    harmonic = int(harmonic_indices[0])
+    plus = np.stack([
+        np.stack([
+            means[:, int(record["mirror_plus_index"]), :, harmonic]
+            for record in records_by_name[name]
+        ], axis=1)
+        for name in names
+    ], axis=1)
+    minus = np.stack([
+        np.stack([
+            means[:, int(record["mirror_minus_index"]), :, harmonic]
+            for record in records_by_name[name]
+        ], axis=1)
+        for name in names
+    ], axis=1)
+    cross_blocks = (plus + minus) / 2
+    difference_blocks = (plus - minus) / 2
+
+    models = {
+        "lambda2": (2,),
+        "lambda2_lambda4": (2, 4),
+        "lambda2_lambda4_lambda6": (2, 4, 6),
+    }
+    windows = (
+        ("low3", np.arange(3)),
+        ("low4", np.arange(4)),
+        ("full", np.arange(5)),
+        ("drop_smallest", np.arange(1, 5)),
+    )
+    operators = {
+        (window_name, model): power_series_operator(scales[indices], orders)
+        for window_name, indices in windows
+        for model, orders in models.items()
+    }
+    cross_mean = cross_blocks.mean(axis=0)
+    difference_mean = difference_blocks.mean(axis=0)
+    fitted = {}
+    for pair_index in range(len(names)):
+        for window_name, indices in windows:
+            for model in models:
+                design, operator = operators[window_name, model]
+                coefficients = operator @ cross_mean[pair_index, indices]
+                residuals = cross_mean[pair_index, indices] - design @ coefficients
+                fitted[pair_index, window_name, model] = (coefficients, residuals)
+
+    bootstrap_cross, bootstrap_difference = _paired_mirror_bootstrap_means(
+        plus, minus, resamples=bootstrap_replicates, seed=bootstrap_seed
+    )
+    bootstrap_leading = {
+        key: np.empty((bootstrap_replicates, len(names), 3), dtype=complex)
+        for key in operators
+    }
+    for replicate in range(bootstrap_replicates):
+        replicate_cross = bootstrap_cross[replicate]
+        for (window_name, model), (_, operator) in operators.items():
+            window_indices = dict(windows)[window_name]
+            for pair_index in range(len(names)):
+                bootstrap_leading[window_name, model][replicate, pair_index] = (
+                    operator @ replicate_cross[pair_index, window_indices]
+                )[0]
+
+    raw_ci = np.percentile(_signed_components(bootstrap_cross), (2.5, 97.5), axis=0)
+    difference_ci = np.percentile(
+        _signed_components(bootstrap_difference), (2.5, 97.5), axis=0
+    )
+    raw_rows = []
+    for pair_index, name in enumerate(names):
+        for scale_index, scale in enumerate(scales):
+            record = records_by_name[name][scale_index]
+            for output_index, output in enumerate(STATE_NAMES):
+                for component_index, component in enumerate(("cos", "sin")):
+                    raw_rows.append({
+                        "pair": name,
+                        "scale": float(scale),
+                        "first_amplitude": record["amplitudes"][0],
+                        "second_amplitude": record["amplitudes"][1],
+                        "output": output,
+                        "component": component,
+                        "Z_cross": _signed_components(cross_mean)[pair_index, scale_index, output_index, component_index],
+                        "Z_cross_ci95_low": raw_ci[0, pair_index, scale_index, output_index, component_index],
+                        "Z_cross_ci95_high": raw_ci[1, pair_index, scale_index, output_index, component_index],
+                        "Z_diag_difference": _signed_components(difference_mean)[pair_index, scale_index, output_index, component_index],
+                        "Z_diag_difference_ci95_low": difference_ci[0, pair_index, scale_index, output_index, component_index],
+                        "Z_diag_difference_ci95_high": difference_ci[1, pair_index, scale_index, output_index, component_index],
+                    })
+
+    fit_rows = []
+    previous_h = {}
+    previous_bootstrap_h = {}
+    for pair_index, name in enumerate(names):
+        base = np.asarray(records_by_name[name][0]["base_amplitudes"], dtype=float)
+        base_product = float(np.prod(base))
+        for model, orders in models.items():
+            for window_name, indices in windows:
+                coefficients, residuals = fitted[pair_index, window_name, model]
+                chi2 = -2 * coefficients[0] / base_product
+                hessian = 2 * chi2
+                boot_chi2 = -2 * bootstrap_leading[window_name, model][:, pair_index] / base_product
+                boot_hessian = 2 * boot_chi2
+                chi2_ci = np.percentile(_signed_components(boot_chi2), (2.5, 97.5), axis=0)
+                ci = np.percentile(_signed_components(boot_hessian), (2.5, 97.5), axis=0)
+                signed_h = _signed_components(hessian)
+                signed_chi2 = _signed_components(chi2)
+                signed_residual = _signed_components(residuals)
+                key = (pair_index, model)
+                for output_index, output in enumerate(STATE_NAMES):
+                    for component_index, component in enumerate(("cos", "sin")):
+                        previous = previous_h.get((key, output_index, component_index))
+                        previous_boot = previous_bootstrap_h.get((key, output_index, component_index))
+                        current_boot = _signed_components(boot_hessian)[:, output_index, component_index]
+                        drift_ci = (
+                            (np.nan, np.nan) if previous_boot is None else
+                            tuple(np.percentile(current_boot - previous_boot, (2.5, 97.5)))
+                        )
+                        fit_rows.append({
+                            "pair": name,
+                            "output": output,
+                            "component": component,
+                            "model": model,
+                            "orders": ";".join(str(order) for order in orders),
+                            "window": window_name,
+                            "scales": ";".join(f"{scales[index]:g}" for index in indices),
+                            "n_scales": len(indices),
+                            "residual_degrees_of_freedom": len(indices) - len(orders),
+                            "base_amplitude_product": base_product,
+                            "leading_Z_coefficient": _signed_components(coefficients[0])[output_index, component_index],
+                            "chi2": signed_chi2[output_index, component_index],
+                            "chi2_ci95_low": chi2_ci[0, output_index, component_index],
+                            "chi2_ci95_high": chi2_ci[1, output_index, component_index],
+                            "H": signed_h[output_index, component_index],
+                            "H_ci95_low": ci[0, output_index, component_index],
+                            "H_ci95_high": ci[1, output_index, component_index],
+                            "H_change_from_previous_window": (
+                                np.nan if previous is None else signed_h[output_index, component_index] - previous
+                            ),
+                            "H_change_ci95_low": drift_ci[0],
+                            "H_change_ci95_high": drift_ci[1],
+                            "residual_rmse": float(np.sqrt(np.mean(signed_residual[:, output_index, component_index] ** 2))),
+                        })
+                        previous_h[key, output_index, component_index] = signed_h[output_index, component_index]
+                        previous_bootstrap_h[key, output_index, component_index] = current_boot
+
+    final_rows = [
+        {**row, "primary": row["model"] == "lambda2_lambda4"}
+        for row in fit_rows
+        if row["output"] == "z" and row["window"] == "full"
+    ]
+    stability = []
+    for name in names:
+        for model in models:
+            for component in ("cos", "sin"):
+                values = [
+                    row["H"] for row in fit_rows
+                    if row["pair"] == name and row["output"] == "z"
+                    and row["model"] == model and row["component"] == component
+                ]
+                stability.append({
+                    "pair": name,
+                    "component": component,
+                    "model": model,
+                    "H_min_across_windows": min(values),
+                    "H_max_across_windows": max(values),
+                    "H_range_across_windows": max(values) - min(values),
+                })
+
+    output = artifact / "mixed_analysis"
+    output.mkdir(parents=True, exist_ok=True)
+    _write_rows_csv(output / "mixed_raw_contrasts.csv", raw_rows)
+    _write_rows_csv(output / "mixed_coefficient_fits.csv", fit_rows)
+    _write_rows_csv(output / "mixed_final_coefficients.csv", final_rows)
+    _write_rows_csv(output / "mixed_fit_stability.csv", stability)
+    write_json_atomic(output / "mixed_analysis_summary.json", {
+        "source_checkpoint": str(checkpoint_path),
+        "block_count": len(block_ids),
+        "bootstrap": {
+            "replicates": bootstrap_replicates,
+            "seed": int(bootstrap_seed),
+            "bit_generator": "PCG64DXSM",
+            "replication_unit": "whole matched block",
+            "pairing": "one index draw shared across every pair, scale, mirror, output, cos and sin; P+/P- combined before fitting",
+        },
+        "fourier_convention": "coefficient=cos-i*sin",
+        "estimator": {
+            "Z_cross": "(Z_plus+Z_minus)/2",
+            "Z_diag_difference": "(Z_plus-Z_minus)/2 (diagnostic only)",
+            "chi2": "-2*leading_lambda2_Z/(base_first*base_second)",
+            "Taylor_H": "2*chi2",
+            "primary_model": "Z_cross=b2*lambda^2+b4*lambda^4",
+        },
+        "final_z_coefficients": final_rows,
+        "fit_window_stability": stability,
+    })
+    return output
+
+
 def run_probe(config_path, resume_dir=None):
     config = json.loads(Path(config_path).resolve().read_text(encoding="utf-8"))
     checked = validate_probe_config(config)
@@ -1106,6 +1384,7 @@ def run_probe(config_path, resume_dir=None):
     }
     if cell.get("condition_phases") is not None:
         checkpoint[f"{prefix}_condition_phases"] = cell["condition_phases"]
+        checkpoint[f"{prefix}_mixed_scales"] = checked["condition_plan"]["scales"]
     if cell.get("condition_labels") is not None:
         checkpoint[f"{prefix}_condition_labels"] = np.asarray(cell["condition_labels"])
     write_npz_atomic(checkpoint_dir / f"{prefix}.npz", checkpoint)
@@ -1123,8 +1402,10 @@ def run_probe(config_path, resume_dir=None):
             "condition_phases": cell["condition_phases"].tolist(),
             "condition_labels": list(cell["condition_labels"]),
             "mixed_pairs": cell["mixed_pairs"],
+            "mixed_phase_pairs": config["mixed_phase_pairs"],
             "harmonics": checked["harmonics"],
         })
+        analyze_mixed_artifact(output_dir)
         _write_probe_manifest(output_dir, config, config_path)
         return output_dir
     entries = build_response_map(cell, checked)
@@ -1279,7 +1560,18 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="validate the config and report task counts only")
     parser.add_argument("--resume", type=Path, default=None)
+    parser.add_argument("--analyze-artifact", type=Path, default=None)
+    parser.add_argument("--bootstrap-replicates", type=int, default=MIXED_BOOTSTRAP_REPLICATES)
+    parser.add_argument("--bootstrap-seed", type=int, default=MIXED_BOOTSTRAP_SEED)
     arguments = parser.parse_args()
+    if arguments.analyze_artifact is not None:
+        output = analyze_mixed_artifact(
+            arguments.analyze_artifact,
+            bootstrap_replicates=arguments.bootstrap_replicates,
+            bootstrap_seed=arguments.bootstrap_seed,
+        )
+        print(json.dumps({"mixed_analysis_dir": str(output)}, indent=2))
+        return
     runtime = initialize_execution()
     try:
         config = json.loads(arguments.config.read_text(encoding="utf-8"))
@@ -1290,7 +1582,9 @@ def main() -> None:
             "directions": len(checked["directions"]),
             "strengths": [float(value) for value in checked["strengths"]],
             "strengths_by_direction": (
-                config.get("strengths_by_direction")
+                None
+                if checked["experiment_type"] == "mirrored_phase_pair"
+                else config.get("strengths_by_direction")
                 if config.get("strengths_by_direction") is not None
                 else {
                     direction_identity(direction)[0]: [float(value) for value in strengths]
@@ -1299,6 +1593,7 @@ def main() -> None:
                     )
                 }
             ),
+            "mixed_phase_pairs": config.get("mixed_phase_pairs"),
             "experiment_type": checked["experiment_type"],
             "block_count": checked["block_count"],
             "cycles": checked["cycles"],

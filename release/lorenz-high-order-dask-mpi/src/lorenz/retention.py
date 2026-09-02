@@ -238,7 +238,8 @@ def paired_direction_strength_vectors(
 def mirrored_phase_pair_conditions(
     directions,
     direction_names,
-    amplitude_pairs_by_direction,
+    scales,
+    base_amplitudes_by_direction,
     *,
     reference_phase: float = 0.0,
     phase_offset: float = np.pi / 4,
@@ -254,33 +255,44 @@ def mirrored_phase_pair_conditions(
         or len(set(names)) != len(names)
     ):
         raise ValueError("mixed directions and unique names must share a finite direction axis")
-    if len(amplitude_pairs_by_direction) != len(directions):
-        raise ValueError("amplitude pairs must match the direction axis")
+    scales = np.asarray(scales, dtype=float)
+    if (
+        scales.ndim != 1
+        or len(scales) < 3
+        or not np.isfinite(scales).all()
+        or np.any(scales <= 0)
+        or np.any(np.diff(scales) <= 0)
+    ):
+        raise ValueError("mixed scales must be positive and strictly increasing")
+    if len(base_amplitudes_by_direction) != len(directions):
+        raise ValueError("base amplitudes must match the direction axis")
     if not np.isfinite(reference_phase) or not np.isfinite(phase_offset):
         raise ValueError("mixed forcing phases must be finite")
+    if not np.isclose(phase_offset, np.pi / 4, rtol=0.0, atol=1e-15):
+        raise ValueError("mirrored second-order probes require phase_offset=pi/4")
 
     vectors = [np.zeros(3, dtype=float)]
     phases = [np.full(3, reference_phase, dtype=float)]
     labels = ["unforced"]
     records = []
     axis_names = ("x", "y", "z")
-    for direction, name, configured_pairs in zip(
-        directions, names, amplitude_pairs_by_direction
+    for direction, name, configured_base in zip(
+        directions, names, base_amplitudes_by_direction
     ):
         active = np.flatnonzero(direction != 0)
         if len(active) != 2 or not np.all(direction[active] == 1.0):
             raise ValueError("each mixed direction must select exactly two axes with value 1")
-        pairs = np.asarray(configured_pairs, dtype=float)
+        if name != "".join(axis_names[index] for index in active):
+            raise ValueError("mixed direction names must identify their two active axes")
+        base = np.asarray(configured_base, dtype=float)
         if (
-            pairs.ndim != 2
-            or pairs.shape[1] != 2
-            or not len(pairs)
-            or not np.isfinite(pairs).all()
-            or np.any(pairs <= 0)
-            or len(np.unique(pairs, axis=0)) != len(pairs)
+            base.shape != (2,)
+            or not np.isfinite(base).all()
+            or np.any(base <= 0)
         ):
-            raise ValueError("each mixed direction requires unique positive amplitude pairs")
-        for pair in pairs:
+            raise ValueError("each mixed direction requires two positive base amplitudes")
+        for scale in scales:
+            pair = scale * base
             vector = np.zeros(3, dtype=float)
             vector[active] = pair
             plus_phase = np.full(3, reference_phase, dtype=float)
@@ -297,7 +309,11 @@ def mirrored_phase_pair_conditions(
                     "name": name,
                     "axes": [axis_names[index] for index in active],
                     "axis_indices": active.tolist(),
+                    "scale": float(scale),
+                    "base_amplitudes": base.tolist(),
                     "amplitudes": pair.tolist(),
+                    "mirror_plus_component_phases": plus_phase[active].tolist(),
+                    "mirror_minus_component_phases": minus_phase[active].tolist(),
                     "mirror_plus_index": plus_index,
                     "mirror_minus_index": plus_index + 1,
                 }
@@ -306,6 +322,7 @@ def mirrored_phase_pair_conditions(
         "forcing_vectors": np.asarray(vectors, dtype=float),
         "forcing_phases": np.asarray(phases, dtype=float),
         "condition_labels": tuple(labels),
+        "scales": scales.copy(),
         "pairs": records,
     }
 

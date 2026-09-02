@@ -14,6 +14,9 @@ remaining 46 ranks are one-thread workers.
 The package includes the completed-lineage single-axis configuration and a
 separate mirrored phase-pair configuration:
 `configs/production/mixed_phase_pairs_omega_5p938_b32768_v1.json`.
+The mixed design uses common scales `1,1.25,1.5,1.75,2` with base component
+amplitudes `xy=(4,2)`, `xz=(4,2.5)`, and `yz=(2,2.5)`, giving 31 conditions
+per block including the shared unforced condition.
 No config from a completed local experiment is included.
 
 ## Upload and install
@@ -59,6 +62,14 @@ Set `NPROC` or `PYTHON_BIN` to override the rank count or interpreter. Use
 Generated scientific artifacts are written under `outputs/`; Dask and
 Matplotlib caches are written under `runtime/cache/`. Neither location is
 inside `src/`.
+
+The mixed run performs its 300-replicate paired-block coefficient analysis
+after checkpoint completion. It can also be repeated without integration:
+
+```bash
+PYTHONPATH=src python -m lorenz.high_order_probe \
+  --analyze-artifact outputs/production/mixed_phase_pairs_omega_5p938_b32768_v1/<artifact-directory>
+```
 
 ## Included runtime surface
 
