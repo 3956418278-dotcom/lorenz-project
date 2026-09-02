@@ -252,6 +252,17 @@ def _integrate_cycle_fourier(arguments):
     return phase_fourier(samples.values, sampling.harmonics, samples.phase_offset)
 
 
+def _integrate_cycle_fourier_block(arguments):
+    """Run every condition for one block inside one execution task."""
+    initial_state, forcing_vectors, sampling, numerical_config = arguments
+    return tuple(
+        _integrate_cycle_fourier(
+            (initial_state, forcing, sampling, numerical_config)
+        )
+        for forcing in forcing_vectors
+    )
+
+
 def integrate_cycle_fourier_conditions(
     block_ids,
     initial_states,
@@ -285,11 +296,17 @@ def integrate_cycle_fourier_conditions(
     if not isinstance(sampling, CycleFourierSampling):
         raise TypeError("sampling must be a CycleFourierSampling")
     tasks = [
-        (initial_states[block_index], forcing, sampling, numerical_config)
+        (initial_states[block_index], forcing_vectors, sampling, numerical_config)
         for block_index in range(len(block_ids))
-        for forcing in forcing_vectors
     ]
-    integrated = map_tasks(_integrate_cycle_fourier, tasks, workers=workers)
+    integrated_blocks = map_tasks(
+        _integrate_cycle_fourier_block, tasks, workers=workers
+    )
+    integrated = [
+        condition
+        for block_conditions in integrated_blocks
+        for condition in block_conditions
+    ]
     return np.asarray(integrated).reshape(
         len(block_ids),
         len(forcing_vectors),
@@ -677,16 +694,18 @@ def _integrate_phase_and_dense(arguments):
     fourier = phase_fourier(
         phase_samples.values, sampling.harmonics, phase_samples.phase_offset
     )
-    summary = dense_trajectory_summary(
-        dense_values,
-        dense_times,
-        sampling.omega,
-        sampling.phase,
-        dense_config["n_theta_bins"],
-        dense_config["welch_segment"],
-        dense_config["max_psd_bins"],
-        dense_config.get("raw_segment_samples", 0),
-    )
+    summary = None
+    if dense_config.get("compute_summary", True):
+        summary = dense_trajectory_summary(
+            dense_values,
+            dense_times,
+            sampling.omega,
+            sampling.phase,
+            dense_config["n_theta_bins"],
+            dense_config["welch_segment"],
+            dense_config["max_psd_bins"],
+            dense_config.get("raw_segment_samples", 0),
+        )
     spectrum = dense_block_spectrum(
         dense_values,
         dense_times,
@@ -697,6 +716,17 @@ def _integrate_phase_and_dense(arguments):
     else:
         dense_retained = None
     return fourier, summary, spectrum, phase_samples, dense_retained
+
+
+def _integrate_phase_and_dense_block(arguments):
+    """Run every dense-output condition for one block in condition order."""
+    initial_state, forcing_vectors, sampling, dense_config, numerical_config = arguments
+    return tuple(
+        _integrate_phase_and_dense(
+            (initial_state, forcing, sampling, dense_config, numerical_config)
+        )
+        for forcing in forcing_vectors
+    )
 
 
 def integrate_phase_and_dense_conditions(
@@ -711,6 +741,7 @@ def integrate_phase_and_dense_conditions(
     raw_segment_blocks: int = 0,
     retain_phase_samples: bool = False,
     retain_dense_blocks: int = 0,
+    compute_summaries: bool = True,
 ):
     """Integrate once per block-by-condition cell into Fourier, dense, and
     spectral summaries.
@@ -726,7 +757,9 @@ def integrate_phase_and_dense_conditions(
     ``retain_dense_blocks`` is positive, the full dense trajectories of the
     first that many blocks are returned with axes
     ``block, condition, state, time``.  Callers are responsible for the
-    retention policy (these objects are large).
+    retention policy (these objects are large).  ``compute_summaries=False``
+    skips dense trajectory summaries while preserving the returned object-array
+    contract with ``None`` entries.
     """
     block_ids = tuple(block_ids)
     initial_states = np.asarray(initial_states, dtype=float)
@@ -757,7 +790,7 @@ def integrate_phase_and_dense_conditions(
     tasks = [
         (
             initial_states[block_index],
-            forcing,
+            forcing_vectors,
             sampling,
             {
                 **dense_config,
@@ -767,13 +800,20 @@ def integrate_phase_and_dense_conditions(
                     else 0
                 ),
                 "retain_dense": block_index < retain_dense_blocks,
+                "compute_summary": compute_summaries,
             },
             numerical_config,
         )
         for block_index in range(len(block_ids))
-        for forcing in forcing_vectors
     ]
-    integrated = map_tasks(_integrate_phase_and_dense, tasks, workers=workers)
+    integrated_blocks = map_tasks(
+        _integrate_phase_and_dense_block, tasks, workers=workers
+    )
+    integrated = [
+        condition
+        for block_conditions in integrated_blocks
+        for condition in block_conditions
+    ]
     fourier = np.asarray([item[0] for item in integrated]).reshape(
         len(block_ids),
         len(forcing_vectors),

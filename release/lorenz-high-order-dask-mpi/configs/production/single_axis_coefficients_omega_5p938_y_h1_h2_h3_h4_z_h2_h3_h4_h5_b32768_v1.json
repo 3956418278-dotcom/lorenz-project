@@ -1,12 +1,16 @@
 {
   "schema_version": 1,
-  "study_id": "single_axis_coefficients_omega_5p938_h4_h6_h8_b512_v1",
-  "classification": "single_axis_coefficient_quadratic_regime_refinement_v1",
-  "output_root": "outputs/production/single_axis_coefficients_omega_5p938_h4_h6_h8_b512_v1",
+  "study_id": "single_axis_coefficients_omega_5p938_y_h1_h2_h3_h4_z_h2_h3_h4_h5_b32768_v1",
+  "classification": "single_axis_small_amplitude_per_direction_production_v1",
+  "output_root": "outputs/production/single_axis_coefficients_omega_5p938_y_h1_h2_h3_h4_z_h2_h3_h4_h5_b32768_v1",
   "runner_path": "src/lorenz/high_order_probe.py",
   "omega": 5.938,
-  "strengths": [4.0, 6.0, 8.0],
-  "block_count": 512,
+  "strengths": [1.0, 2.0, 3.0, 4.0, 5.0],
+  "strengths_by_direction": {
+    "y": [1.0, 2.0, 3.0, 4.0],
+    "z": [2.0, 3.0, 4.0, 5.0]
+  },
+  "block_count": 32768,
   "workers": 8,
   "discard_time": 160.0,
   "n_phase": 32,
@@ -36,9 +40,8 @@
     }
   },
   "protocol": {
-    "status": "single-axis quadratic-regime B=512 refinement",
+    "status": "single-axis small-amplitude B=32768 production",
     "directions": [
-      [1.0, 0.0, 0.0],
       [0.0, 1.0, 0.0],
       [0.0, 0.0, 1.0]
     ],
@@ -49,20 +52,21 @@
     "n_theta_bins": 256,
     "welch_segment": 512,
     "max_psd_bins": 256,
-    "raw_segment_blocks": 2,
+    "raw_segment_blocks": 0,
     "raw_segment_samples": 1200,
     "spectrum_max_omega": null,
     "spectrum_harmonic_cap": 5.0
   },
   "retention": {
-    "per_cycle_fourier_blocks": 64,
+    "per_cycle_fourier_blocks": 0,
     "phase_samples_blocks": 0,
     "dense_trajectory_blocks": 0,
-    "block_spectra": true,
+    "spectrum_blocks": 0,
     "chunk_blocks": 32
   },
   "inference": {
     "confidence": 0.95,
     "fdr_alpha": 0.05
-  }
+  },
+  "generate_figures": false
 }

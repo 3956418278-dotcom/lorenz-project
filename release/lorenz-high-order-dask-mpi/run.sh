@@ -2,9 +2,20 @@
 set -euo pipefail
 
 RELEASE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG="${1:-configs/production/single_axis_coefficients_omega_5p938_h4_h6_h8_b512_v1.json}"
-if [[ $# -gt 0 ]]; then
-  shift
+if [[ $# -lt 1 ]]; then
+  echo "usage: $0 <experiment-config.json> [--resume <artifact-directory>]" >&2
+  exit 2
+fi
+CONFIG="$1"
+shift
+
+if [[ -f "${CONFIG}" ]]; then
+  CONFIG="$(cd "$(dirname "${CONFIG}")" && pwd)/$(basename "${CONFIG}")"
+elif [[ -f "${RELEASE_ROOT}/${CONFIG}" ]]; then
+  CONFIG="${RELEASE_ROOT}/${CONFIG}"
+else
+  echo "experiment config does not exist: ${CONFIG}" >&2
+  exit 2
 fi
 
 NPROC="${NPROC:-48}"

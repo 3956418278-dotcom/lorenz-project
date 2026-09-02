@@ -48,6 +48,7 @@ from .retention import (
     condition_axis_permutation,
     load_spectrum_conditions,
     paired_condition_indices,
+    paired_direction_strength_vectors,
     paired_condition_vectors,
     parse_retention_policy,
     write_block_level_chunk,
@@ -65,6 +66,7 @@ from .strength_study import (
     STATE_NAMES,
     CycleFourierSampling,
     validate_strengths,
+    integrate_cycle_fourier_conditions,
     integrate_phase_and_dense_conditions,
     minimum_duration_cycle_count,
 )
@@ -97,6 +99,26 @@ def validate_probe_config(config: dict) -> dict:
     for direction in directions:
         if direction.shape != (3,) or not np.isfinite(direction).all() or not np.any(direction):
             raise ValueError("each direction must be a finite nonzero vector")
+    direction_labels = [direction_identity(direction)[0] for direction in directions]
+    configured_by_direction = config.get("strengths_by_direction")
+    if configured_by_direction is None:
+        strengths_by_direction = [strengths.copy() for _ in directions]
+    else:
+        if not isinstance(configured_by_direction, dict):
+            raise ValueError("strengths_by_direction must map direction labels to strengths")
+        if set(configured_by_direction) != set(direction_labels):
+            raise ValueError(
+                "strengths_by_direction keys must exactly match configured direction labels"
+            )
+        strengths_by_direction = [
+            validate_strengths(configured_by_direction[label], minimum_count=1)
+            for label in direction_labels
+        ]
+        strength_union = np.unique(np.concatenate(strengths_by_direction))
+        if not np.array_equal(strength_union, strengths):
+            raise ValueError(
+                "strengths must be the sorted union of strengths_by_direction"
+            )
     minimum_cycles = int(config["observation_rule"]["minimum_cycles"])
     minimum_time = float(config["observation_rule"]["minimum_physical_time"])
     if minimum_cycles < 1 or minimum_time <= 0:
@@ -121,10 +143,18 @@ def validate_probe_config(config: dict) -> dict:
     if not 0 < fdr_alpha < 1:
         raise ValueError("inference.fdr_alpha must lie strictly between zero and one")
     policy = parse_retention_policy(config, block_count)
+    generate_figures = config.get("generate_figures", True)
+    if not isinstance(generate_figures, bool):
+        raise ValueError("generate_figures must be true or false")
+    if generate_figures and policy.spectrum_blocks == 0:
+        raise ValueError("figure generation requires retained spectrum blocks")
+    if configured_by_direction is not None and config.get("extension") is not None:
+        raise ValueError("extension runs do not support strengths_by_direction")
     extension = _validate_extension_config(config, strengths)
     return {
         "omega": omega,
         "strengths": strengths,
+        "strengths_by_direction": strengths_by_direction,
         "directions": directions,
         "block_count": block_count,
         "cycles": cycles,
@@ -132,6 +162,7 @@ def validate_probe_config(config: dict) -> dict:
         "retention_policy": policy,
         "confidence": confidence,
         "fdr_alpha": fdr_alpha,
+        "generate_figures": generate_figures,
         "extension": extension,
     }
 
@@ -187,7 +218,10 @@ def probe_task_counts(checked: dict) -> dict:
             "conditions_per_block": integrated_conditions,
             "combined_conditions_per_block": combined_conditions,
         }
-    conditions = 1 + 2 * len(checked["strengths"]) * len(checked["directions"])
+    forced_conditions = 2 * sum(
+        len(values) for values in checked["strengths_by_direction"]
+    )
+    conditions = 1 + forced_conditions
     return {
         "unforced_trajectories": checked["block_count"],
         "forced_trajectories": checked["block_count"] * (conditions - 1),
@@ -305,12 +339,11 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
     unforced trajectory per block, persisting the retained block-level
     objects and returning the per-condition cycle means."""
     omega = checked["omega"]
-    strengths = checked["strengths"]
     directions = checked["directions"]
     block_count = checked["block_count"]
     workers = int(config.get("workers", 1))
-    forcing_vectors = paired_condition_vectors(
-        directions, strengths, include_unforced=True
+    forcing_vectors = paired_direction_strength_vectors(
+        directions, checked["strengths_by_direction"], include_unforced=True
     )
     condition_count = len(forcing_vectors)
     sampling = CycleFourierSampling(
@@ -331,12 +364,15 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
         "lorenz": dict(config["lorenz"]),
         "solver": dict(config["solver"]),
     }
-    raw_segment_blocks = int(dense_config.get("raw_segment_blocks", 0))
     prefix = f"omega_{format(float(omega), '.12g').replace('-', 'm').replace('.', 'p')}"
     means_pieces = []
     for start, end in chunk_ranges(block_count, policy.chunk_blocks):
         chunk_ids = blocks.block_ids[start:end]
         chunk_length = end - start
+        need_spectrum = start < policy.spectrum_blocks
+        retained_spectrum_count = max(
+            0, min(policy.spectrum_blocks - start, chunk_length)
+        )
         chunk_path = (
             output_dir / BLOCK_LEVEL_DIRECTORY / prefix
             / chunk_file_name(prefix, start, end)
@@ -349,7 +385,12 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
                     or not np.array_equal(retained["block_ids"], expected_ids)
                     or retained["condition_means"].shape
                     != (chunk_length, condition_count, 3, len(checked["harmonics"]))
-                    or (policy.block_spectra and "spectrum" not in retained)
+                    or need_spectrum != ("spectrum" in retained)
+                    or (
+                        need_spectrum
+                        and retained["spectrum"].shape[0]
+                        != retained_spectrum_count
+                    )
                 ):
                     raise ValueError(f"incomplete or incompatible probe chunk: {chunk_path}")
                 means_pieces.append(np.asarray(retained["condition_means"]))
@@ -358,19 +399,30 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
                 flush=True,
             )
             continue
-        chunk_raw = max(0, min(raw_segment_blocks - start, chunk_length))
-        fourier, summaries, spectra, _, _, _ = integrate_phase_and_dense_conditions(
-            chunk_ids,
-            blocks.final_states[start:end],
-            forcing_vectors,
-            sampling,
-            dense_config,
-            numerical_config,
-            workers=workers,
-            raw_segment_blocks=chunk_raw,
-            retain_phase_samples=False,
-            retain_dense_blocks=0,
-        )
+        spectra = None
+        if need_spectrum:
+            fourier, _, spectra, _, _, _ = integrate_phase_and_dense_conditions(
+                chunk_ids,
+                blocks.final_states[start:end],
+                forcing_vectors,
+                sampling,
+                dense_config,
+                numerical_config,
+                workers=workers,
+                raw_segment_blocks=0,
+                retain_phase_samples=False,
+                retain_dense_blocks=0,
+                compute_summaries=False,
+            )
+        else:
+            fourier = integrate_cycle_fourier_conditions(
+                chunk_ids,
+                blocks.final_states[start:end],
+                forcing_vectors,
+                sampling,
+                numerical_config,
+                workers=workers,
+            )
         condition_means = fourier.mean(axis=3)  # (chunk, cond, 3, H)
         means_pieces.append(condition_means)
         retained_fourier = None
@@ -381,13 +433,13 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
         retained_spectra = None
         spectrum_grid = None
         spectrum_counts = None
-        if policy.block_spectra:
+        if need_spectrum:
             retained_spectra = np.stack(
                 [
                     np.stack(
                         [spectra[b, c].coefficients for c in range(condition_count)]
                     )
-                    for b in range(chunk_length)
+                    for b in range(retained_spectrum_count)
                 ]
             )
             spectrum_grid = spectra[0, 0].frequency_grid
@@ -396,7 +448,7 @@ def _generate_full_probe_cell(config, checked, blocks, output_dir, policy) -> di
                     np.asarray(
                         [spectra[b, c].segment_count for c in range(condition_count)]
                     )
-                    for b in range(chunk_length)
+                    for b in range(retained_spectrum_count)
                 ]
             )
         chunk_path.parent.mkdir(parents=True, exist_ok=True)
@@ -479,12 +531,15 @@ def _generate_extension_probe_cell(
         "lorenz": dict(config["lorenz"]),
         "solver": dict(config["solver"]),
     }
-    raw_segment_blocks = int(dense_config.get("raw_segment_blocks", 0))
     prefix = base["prefix"]
     means_pieces = []
     for start, end in chunk_ranges(block_count, policy.chunk_blocks):
         chunk_ids = np.asarray(blocks.block_ids[start:end], dtype=np.uint32)
         chunk_length = end - start
+        need_spectrum = start < policy.spectrum_blocks
+        retained_spectrum_count = max(
+            0, min(policy.spectrum_blocks - start, chunk_length)
+        )
         filename = chunk_file_name(prefix, start, end)
         chunk_path = output_dir / BLOCK_LEVEL_DIRECTORY / prefix / filename
         if chunk_path.is_file():
@@ -499,7 +554,12 @@ def _generate_extension_probe_cell(
                     or retained["condition_means"].shape
                     != (chunk_length, combined_condition_count, 3,
                         len(checked["harmonics"]))
-                    or (policy.block_spectra and "spectrum" not in retained)
+                    or need_spectrum != ("spectrum" in retained)
+                    or (
+                        need_spectrum
+                        and retained["spectrum"].shape[0]
+                        != retained_spectrum_count
+                    )
                 ):
                     raise ValueError(
                         f"incomplete or incompatible extension chunk: {chunk_path}"
@@ -539,19 +599,30 @@ def _generate_extension_probe_cell(
             != base["manifest_files"][base_relative]
         ):
             raise ValueError(f"base manifest hash mismatch: {base_relative}")
-        chunk_raw = max(0, min(raw_segment_blocks - start, chunk_length))
-        fourier, summaries, spectra, _, _, _ = integrate_phase_and_dense_conditions(
-            chunk_ids,
-            blocks.final_states[start:end],
-            extension_vectors,
-            sampling,
-            dense_config,
-            numerical_config,
-            workers=workers,
-            raw_segment_blocks=chunk_raw,
-            retain_phase_samples=False,
-            retain_dense_blocks=0,
-        )
+        spectra = None
+        if need_spectrum:
+            fourier, _, spectra, _, _, _ = integrate_phase_and_dense_conditions(
+                chunk_ids,
+                blocks.final_states[start:end],
+                extension_vectors,
+                sampling,
+                dense_config,
+                numerical_config,
+                workers=workers,
+                raw_segment_blocks=0,
+                retain_phase_samples=False,
+                retain_dense_blocks=0,
+                compute_summaries=False,
+            )
+        else:
+            fourier = integrate_cycle_fourier_conditions(
+                chunk_ids,
+                blocks.final_states[start:end],
+                extension_vectors,
+                sampling,
+                numerical_config,
+                workers=workers,
+            )
         new_means = fourier.mean(axis=3)
         new_cycle_fourier = None
         if policy.per_cycle_fourier_blocks > start:
@@ -561,13 +632,13 @@ def _generate_extension_probe_cell(
         new_spectra = None
         new_grid = None
         new_counts = None
-        if policy.block_spectra:
+        if need_spectrum:
             new_spectra = np.stack([
                 np.stack([
                     spectra[b, c].coefficients
                     for c in range(integrated_condition_count)
                 ])
-                for b in range(chunk_length)
+                for b in range(retained_spectrum_count)
             ])
             new_grid = np.asarray(spectra[0, 0].frequency_grid, dtype=float)
             new_counts = np.stack([
@@ -575,7 +646,7 @@ def _generate_extension_probe_cell(
                     spectra[b, c].segment_count
                     for c in range(integrated_condition_count)
                 ])
-                for b in range(chunk_length)
+                for b in range(retained_spectrum_count)
             ])
 
         with np.load(base_path, allow_pickle=False) as retained:
@@ -584,7 +655,7 @@ def _generate_extension_probe_cell(
             cycle_difference = 0.0
             counts_exact = True
             required = {"block_ids", "condition_means"}
-            if policy.block_spectra:
+            if need_spectrum:
                 required.update({
                     "spectrum", "spectrum_frequency_grid", "spectrum_segment_counts"
                 })
@@ -636,7 +707,7 @@ def _generate_extension_probe_cell(
             combined_spectra = None
             combined_counts = None
             combined_grid = None
-            if policy.block_spectra:
+            if need_spectrum:
                 combined_grid = np.asarray(
                     retained["spectrum_frequency_grid"], dtype=float
                 )
@@ -725,13 +796,15 @@ def build_response_map(cell: dict, checked: dict) -> list:
     """direction x output x harmonic x strength x {cos, sin} response map."""
     means = cell["means"]
     directions = checked["directions"]
-    strengths = checked["strengths"]
+    strengths_by_direction = checked["strengths_by_direction"]
     harmonics = [int(value) for value in checked["harmonics"]]
     idx = {value: index for index, value in enumerate(harmonics)}
     unforced_index = 0
     unforced = means[:, unforced_index]
     entries = []
-    for direction_index, direction in enumerate(directions):
+    for direction_index, (direction, strengths) in enumerate(
+        zip(directions, strengths_by_direction)
+    ):
         direction_label, _ = direction_identity(direction)
         for strength in strengths:
             strength = float(strength)
@@ -821,6 +894,17 @@ def attach_background_scales(entries, output_dir, prefix, omega):
             float(entry["magnitude_derived"] / median) if median > 0 else None
         )
     return background, frequency_grid
+
+
+def mark_background_scales_unavailable(entries):
+    """Keep numerical output schemas stable when spectra are not retained."""
+    for entry in entries:
+        if entry["harmonic"] == 0:
+            continue
+        entry["background_frequency_bin"] = None
+        entry["background_single_block_median"] = None
+        entry["background_single_block_q05_q95"] = [None, None]
+        entry["response_to_background_median"] = None
 
 
 def _significance_rows(entries):
@@ -917,6 +1001,11 @@ def build_detection_summary(entries, alpha=0.05):
             "median |S_b(Omega)| of single-block unforced retained spectra at "
             "the nearest display bin; scientific response numerator is the "
             "direct known-frequency coefficient"
+            if any(
+                entry["background_single_block_median"] is not None
+                for entry in tested
+            )
+            else "not computed because physical-frequency spectra were not retained"
         ),
         "by_strength": by_strength,
         "by_harmonic": by_harmonic,
@@ -967,14 +1056,17 @@ def run_probe(config_path, resume_dir=None):
     write_npz_atomic(checkpoint_dir / f"{prefix}.npz", checkpoint)
     entries = build_response_map(cell, checked)
     add_probe_q_values(entries, alpha=checked["fdr_alpha"])
-    background, spectrum_grid = attach_background_scales(
-        entries, output_dir, prefix, checked["omega"]
-    )
+    background = spectrum_grid = None
+    if policy.spectrum_blocks:
+        background, spectrum_grid = attach_background_scales(
+            entries, output_dir, prefix, checked["omega"]
+        )
+    else:
+        mark_background_scales_unavailable(entries)
     family_size = (
-        len(checked["directions"])
+        sum(len(values) for values in checked["strengths_by_direction"])
         * len(STATE_NAMES)
         * sum(harmonic != 0 for harmonic in checked["harmonics"])
-        * len(checked["strengths"])
     )
     base_metadata = None
     if checked.get("extension") is not None:
@@ -999,9 +1091,8 @@ def run_probe(config_path, resume_dir=None):
     derived = {
         "interpretation": (
             "high-order probe: which (direction, output, harmonic) cells "
-            "show a reliable signed response; high amplitudes are probe "
-            "settings, not perturbative coefficients; h>=8 values are discovery "
-            "amplitudes and not perturbative tensor estimates"
+            "show a reliable signed response; configured amplitudes are "
+            "finite-amplitude responses, not perturbative tensor estimates"
         ),
         "convention": (
             "mean(x exp(-i n theta)); cos component = Re, sin component = -Im"
@@ -1017,6 +1108,12 @@ def run_probe(config_path, resume_dir=None):
         ),
         "directions": [value.tolist() for value in checked["directions"]],
         "strengths": [float(value) for value in checked["strengths"]],
+        "strengths_by_direction": {
+            direction_identity(direction)[0]: [float(value) for value in strengths]
+            for direction, strengths in zip(
+                checked["directions"], checked["strengths_by_direction"]
+            )
+        },
         "harmonics": [0, 1, 2, 3, 4, 5],
         "response_map": entries,
     }
@@ -1033,40 +1130,41 @@ def run_probe(config_path, resume_dir=None):
     _write_significance_csv(output_dir / "significance_table.csv", significance_rows)
     summary = build_detection_summary(entries, alpha=checked["fdr_alpha"])
     write_json_atomic(output_dir / "detection_summary.json", summary)
-    figure_dir = output_dir / "figures"
-    save_figure(
-        figure_probe_signed_responses(
-            entries, "cos", confidence=checked["confidence"]
-        ),
-        figure_dir,
-        "signed_cos_response",
-    )
-    save_figure(
-        figure_probe_signed_responses(
-            entries, "sin", confidence=checked["confidence"]
-        ),
-        figure_dir,
-        "signed_sin_response",
-    )
-    save_figure(
-        figure_probe_detection_overview(entries),
-        figure_dir,
-        "detection_overview",
-    )
-    save_figure(
-        figure_probe_spectrum_noise(
-            entries,
-            cell["directions"],
-            cell["condition_vectors"],
-            output_dir / BLOCK_LEVEL_DIRECTORY,
-            prefix,
-            background,
-            spectrum_grid,
-            checked["omega"],
-        ),
-        figure_dir,
-        "spectrum_noise",
-    )
+    if checked["generate_figures"]:
+        figure_dir = output_dir / "figures"
+        save_figure(
+            figure_probe_signed_responses(
+                entries, "cos", confidence=checked["confidence"]
+            ),
+            figure_dir,
+            "signed_cos_response",
+        )
+        save_figure(
+            figure_probe_signed_responses(
+                entries, "sin", confidence=checked["confidence"]
+            ),
+            figure_dir,
+            "signed_sin_response",
+        )
+        save_figure(
+            figure_probe_detection_overview(entries),
+            figure_dir,
+            "detection_overview",
+        )
+        save_figure(
+            figure_probe_spectrum_noise(
+                entries,
+                cell["directions"],
+                cell["condition_vectors"],
+                output_dir / BLOCK_LEVEL_DIRECTORY,
+                prefix,
+                background,
+                spectrum_grid,
+                checked["omega"],
+            ),
+            figure_dir,
+            "spectrum_noise",
+        )
     provenance = {
         "config_identifier": f"sha256:{file_sha256(config_path)}",
         "code_identifiers": active_source_identifiers(
@@ -1098,7 +1196,8 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT / "configs/production/high_order_probe_omega_6p7_v1.json",
+        required=True,
+        help="external experiment configuration JSON",
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="validate the config and report task counts only")
@@ -1113,6 +1212,12 @@ def main() -> None:
             "omega": checked["omega"],
             "directions": len(checked["directions"]),
             "strengths": [float(value) for value in checked["strengths"]],
+            "strengths_by_direction": {
+                direction_identity(direction)[0]: [float(value) for value in strengths]
+                for direction, strengths in zip(
+                    checked["directions"], checked["strengths_by_direction"]
+                )
+            },
             "block_count": checked["block_count"],
             "cycles": checked["cycles"],
             "conditions_per_block": counts["conditions_per_block"],

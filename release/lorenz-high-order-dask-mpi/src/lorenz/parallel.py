@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from itertools import islice
 import logging
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any, Callable, Iterable
 
 
 RELEASE_ROOT = Path(__file__).resolve().parents[2]
+DASK_MAX_IN_FLIGHT = 2048
 
 
 @dataclass
@@ -118,14 +120,50 @@ def map_tasks(
     function: Callable[[Any], Any], tasks: Iterable[Any], *, workers: int
 ) -> list[Any]:
     """Map current numerical task functions without changing their inputs."""
-    task_list = list(tasks)
     runtime = _ACTIVE_RUNTIME
     if runtime is not None and runtime.client is not None:
-        futures = runtime.client.map(function, task_list, pure=False)
+        from dask.distributed import as_completed
+
+        task_iterator = iter(tasks)
+        initial_tasks = list(islice(task_iterator, DASK_MAX_IN_FLIGHT))
+        if not initial_tasks:
+            return []
+        futures = runtime.client.map(function, initial_tasks, pure=False)
+        future_indices = {
+            future: index for index, future in enumerate(futures)
+        }
+        ordered_results = [None] * len(futures)
+        next_index = len(futures)
+        completion = as_completed(futures, with_results=True)
         try:
-            return runtime.client.gather(futures)
+            while future_indices:
+                completed = completion.next_batch(block=True)
+                completed_futures = []
+                for future, result in completed:
+                    ordered_results[future_indices.pop(future)] = result
+                    completed_futures.append(future)
+                runtime.client.cancel(completed_futures)
+
+                replacement_tasks = list(islice(
+                    task_iterator, len(completed_futures)
+                ))
+                if replacement_tasks:
+                    replacements = runtime.client.map(
+                        function, replacement_tasks, pure=False
+                    )
+                    replacement_start = next_index
+                    next_index += len(replacements)
+                    ordered_results.extend([None] * len(replacements))
+                    future_indices.update({
+                        future: replacement_start + offset
+                        for offset, future in enumerate(replacements)
+                    })
+                    completion.update(replacements)
         finally:
-            runtime.client.cancel(futures)
+            if future_indices:
+                runtime.client.cancel(list(future_indices))
+        return ordered_results
+    task_list = list(tasks)
     if workers == 1:
         return list(map(function, task_list))
     with ProcessPoolExecutor(max_workers=workers) as executor:

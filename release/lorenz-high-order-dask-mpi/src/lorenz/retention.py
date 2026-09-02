@@ -37,16 +37,16 @@ class RetentionPolicy:
     """Resolved retention decisions for one experiment run.
 
     Each ``*_blocks`` field is a concrete block count (``0`` means nothing is
-    retained; ``block_count`` means every block).  ``block_spectra`` controls
-    the complex per-block physical-frequency spectra, which have no legacy
-    equivalent.  ``chunk_blocks`` is the block-chunk size used for the
-    chunked on-disk layout.
+    retained; ``block_count`` means every block).  ``spectrum_blocks`` applies
+    the same first-N-block rule to complex per-block physical-frequency
+    spectra.  ``chunk_blocks`` is the block-chunk size used for the chunked
+    on-disk layout.
     """
 
     per_cycle_fourier_blocks: int
     phase_samples_blocks: int
     dense_trajectory_blocks: int
-    block_spectra: bool
+    spectrum_blocks: int
     chunk_blocks: int
 
 
@@ -98,7 +98,11 @@ def parse_retention_policy(config: dict, block_count: int) -> RetentionPolicy:
         dense_trajectory_blocks=_resolved_blocks(
             retention.get("dense_trajectory_blocks"), block_count, default=0
         ),
-        block_spectra=bool(retention.get("block_spectra", True)),
+        spectrum_blocks=_resolved_blocks(
+            retention.get("spectrum_blocks", "all"),
+            block_count,
+            default=block_count,
+        ),
         chunk_blocks=chunk_blocks,
     )
 
@@ -181,10 +185,50 @@ def paired_condition_vectors(
         raise ValueError("directions must have finite axes direction,state")
     if strengths.ndim != 1 or not np.isfinite(strengths).all():
         raise ValueError("strengths must be a finite one-dimensional array")
+    return paired_direction_strength_vectors(
+        directions,
+        [strengths] * len(directions),
+        include_unforced=include_unforced,
+    )
+
+
+def paired_direction_strength_vectors(
+    directions, strengths_by_direction, *, include_unforced: bool = True
+) -> np.ndarray:
+    """Build a paired condition axis with a strength set per direction.
+
+    The ordering remains direction, then increasing strength, then positive/
+    negative sign, so the resulting array has the same condition-axis contract
+    as :func:`paired_condition_vectors`.
+    """
+    directions = np.asarray(directions, dtype=float)
+    if (
+        directions.ndim != 2
+        or directions.shape[1] != 3
+        or not np.isfinite(directions).all()
+    ):
+        raise ValueError("directions must have finite axes direction,state")
+    if len(strengths_by_direction) != len(directions):
+        raise ValueError("strengths_by_direction must match the direction axis")
+    resolved_strengths = []
+    for strengths in strengths_by_direction:
+        values = np.asarray(strengths, dtype=float)
+        if (
+            values.ndim != 1
+            or not len(values)
+            or not np.isfinite(values).all()
+            or np.any(values <= 0)
+            or np.any(np.diff(values) <= 0)
+        ):
+            raise ValueError(
+                "each direction strength set must contain finite, positive, "
+                "strictly increasing values"
+            )
+        resolved_strengths.append(values)
     vectors = [np.zeros(3)] if include_unforced else []
     vectors.extend(
         sign * strength * direction
-        for direction in directions
+        for direction, strengths in zip(directions, resolved_strengths)
         for strength in strengths
         for sign in (1.0, -1.0)
     )
@@ -243,18 +287,18 @@ def load_spectrum_conditions(directory, prefix: str, condition_indices):
     pieces = []
     frequency_grid = None
     paths = sorted((directory / prefix).glob("*.npz"))
-    if not paths:
-        raise ValueError("no retained block spectra were found")
     for path in paths:
         with np.load(path, allow_pickle=False) as chunk:
             if "spectrum" not in chunk:
-                raise ValueError(f"retained spectrum missing from {path}")
+                continue
             grid = np.asarray(chunk["spectrum_frequency_grid"], dtype=float)
             if frequency_grid is None:
                 frequency_grid = grid
             elif not np.array_equal(frequency_grid, grid):
                 raise ValueError("spectrum grids differ across chunks")
             pieces.append(np.asarray(chunk["spectrum"][:, indices]))
+    if not pieces:
+        raise ValueError("no retained block spectra were found")
     return np.concatenate(pieces, axis=0), frequency_grid
 
 
@@ -323,7 +367,7 @@ def write_condition_metadata(
                 "per_cycle_fourier_blocks": policy.per_cycle_fourier_blocks,
                 "phase_samples_blocks": policy.phase_samples_blocks,
                 "dense_trajectory_blocks": policy.dense_trajectory_blocks,
-                "block_spectra": policy.block_spectra,
+                "spectrum_blocks": policy.spectrum_blocks,
                 "chunk_blocks": policy.chunk_blocks,
             },
             "axes": {

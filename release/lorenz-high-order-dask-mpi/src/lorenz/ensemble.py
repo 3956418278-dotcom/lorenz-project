@@ -10,6 +10,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 from .core import check_solution, lorenz_rhs
+from .parallel import map_tasks
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,19 @@ def _frozen_copy(array) -> np.ndarray:
     return result
 
 
+def _spinup_initial_state(arguments) -> np.ndarray:
+    initial_state, spinup_time, cfg = arguments
+    sol = solve_ivp(
+        lambda t, state: lorenz_rhs(t, state, cfg),
+        [0.0, spinup_time],
+        initial_state,
+        t_eval=[spinup_time],
+        **cfg["solver"],
+    )
+    check_solution(sol, (3, 1))
+    return sol.y[:, -1]
+
+
 def generate_initial_state_blocks(
     block_ids,
     root_seed,
@@ -128,18 +142,23 @@ def generate_initial_state_blocks(
         raw = rng.uniform(proposal.lower, proposal.upper)
         raw_proposals[index] = raw
 
-        if spinup_time == 0:
-            final_states[index] = raw
-            continue
-        sol = solve_ivp(
-            lambda t, state: lorenz_rhs(t, state, cfg),
-            [0.0, float(spinup_time)],
-            raw,
-            t_eval=[float(spinup_time)],
-            **cfg["solver"],
+    if spinup_time == 0:
+        final_states[:] = raw_proposals
+    else:
+        spinup_time = float(spinup_time)
+        final_states[:] = np.asarray(
+            map_tasks(
+                _spinup_initial_state,
+                (
+                    (raw, spinup_time, cfg)
+                    for raw in raw_proposals
+                ),
+                # An active Dask runtime owns distribution; keep the existing
+                # direct-call fallback serial when no runtime was initialized.
+                workers=1,
+            ),
+            dtype=float,
         )
-        check_solution(sol, (3, 1))
-        final_states[index] = sol.y[:, -1]
 
     entropy = root.entropy
     if isinstance(entropy, (list, tuple, np.ndarray)):
