@@ -71,7 +71,10 @@ from .strength_study import (
     integrate_phase_and_dense_conditions,
     minimum_duration_cycle_count,
 )
-from .strength_series import power_series_operator
+from .strength_series import (
+    crossed_block_gls_fit,
+    joint_crossed_block_model_comparison,
+)
 from .ensemble import generate_configured_initial_state_blocks
 from .parallel import close_execution, initialize_execution
 
@@ -1075,29 +1078,45 @@ def _write_rows_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         raise ValueError("cannot write an empty mixed-analysis table")
     stream = io.StringIO()
-    writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+    fieldnames = list(rows[0])
+    fieldnames.extend(
+        key for row in rows for key in row
+        if key not in fieldnames
+    )
+    writer = csv.DictWriter(stream, fieldnames=fieldnames)
     writer.writeheader()
     writer.writerows(rows)
     path.write_text(stream.getvalue(), encoding="utf-8", newline="")
 
 
-def _paired_mirror_bootstrap_means(plus, minus, *, resamples: int, seed: int):
+def _paired_mirror_bootstrap_means(unforced, plus, minus, *, resamples: int, seed: int):
     """Resample whole blocks jointly and combine both mirrors per draw."""
     plus = np.asarray(plus)
     minus = np.asarray(minus)
-    if plus.shape != minus.shape or plus.ndim < 2 or plus.shape[0] < 2:
+    unforced = np.asarray(unforced)
+    if (
+        plus.shape != minus.shape
+        or plus.ndim < 2
+        or plus.shape[0] < 2
+        or unforced.shape != (plus.shape[0], plus.shape[-1])
+    ):
         raise ValueError("mirror arrays must share a block axis with at least two blocks")
     cross = np.empty((resamples, *plus.shape[1:]), dtype=complex)
     difference = np.empty_like(cross)
     seed_sequence = np.random.SeedSequence(seed)
     rng = np.random.Generator(np.random.PCG64DXSM(seed_sequence))
+    indices_by_replicate = np.empty((resamples, plus.shape[0]), dtype=np.uint32)
     for replicate in range(resamples):
         indices = rng.integers(0, plus.shape[0], size=plus.shape[0])
+        indices_by_replicate[replicate] = indices
         plus_mean = plus[indices].mean(axis=0)
         minus_mean = minus[indices].mean(axis=0)
-        cross[replicate] = (plus_mean + minus_mean) / 2
+        unforced_mean = unforced[indices].mean(axis=0)
+        cross[replicate] = (
+            (plus_mean + minus_mean) / 2 - unforced_mean[None, None, :]
+        )
         difference[replicate] = (plus_mean - minus_mean) / 2
-    return cross, difference
+    return cross, difference, indices_by_replicate
 
 
 def analyze_mixed_artifact(
@@ -1161,7 +1180,8 @@ def analyze_mixed_artifact(
         ], axis=1)
         for name in names
     ], axis=1)
-    cross_blocks = (plus + minus) / 2
+    unforced = means[:, 0, :, harmonic]
+    cross_blocks = (plus + minus) / 2 - unforced[:, None, None, :]
     difference_blocks = (plus - minus) / 2
 
     models = {
@@ -1175,37 +1195,58 @@ def analyze_mixed_artifact(
         ("full", np.arange(5)),
         ("drop_smallest", np.arange(1, 5)),
     )
-    operators = {
-        (window_name, model): power_series_operator(scales[indices], orders)
+    fit_specs = {
+        (window_name, model): (indices, orders)
         for window_name, indices in windows
         for model, orders in models.items()
+        if len(indices) > len(orders)
     }
     cross_mean = cross_blocks.mean(axis=0)
     difference_mean = difference_blocks.mean(axis=0)
+    signed_cross_blocks = _signed_components(cross_blocks)
     fitted = {}
     for pair_index in range(len(names)):
-        for window_name, indices in windows:
-            for model in models:
-                design, operator = operators[window_name, model]
-                coefficients = operator @ cross_mean[pair_index, indices]
-                residuals = cross_mean[pair_index, indices] - design @ coefficients
-                fitted[pair_index, window_name, model] = (coefficients, residuals)
+        for (window_name, model), (indices, orders) in fit_specs.items():
+            for component_index in range(2):
+                fitted[pair_index, window_name, model, component_index] = (
+                    crossed_block_gls_fit(
+                        signed_cross_blocks[:, pair_index, indices, 2, component_index],
+                        scales[indices],
+                        orders,
+                    )
+                )
 
-    bootstrap_cross, bootstrap_difference = _paired_mirror_bootstrap_means(
-        plus, minus, resamples=bootstrap_replicates, seed=bootstrap_seed
+    bootstrap_cross, bootstrap_difference, bootstrap_indices = _paired_mirror_bootstrap_means(
+        unforced, plus, minus, resamples=bootstrap_replicates, seed=bootstrap_seed
     )
     bootstrap_leading = {
-        key: np.empty((bootstrap_replicates, len(names), 3), dtype=complex)
-        for key in operators
+        key: np.empty((bootstrap_replicates, len(names), 2), dtype=float)
+        for key in fit_specs
     }
     for replicate in range(bootstrap_replicates):
-        replicate_cross = bootstrap_cross[replicate]
-        for (window_name, model), (_, operator) in operators.items():
-            window_indices = dict(windows)[window_name]
+        block_indices = bootstrap_indices[replicate]
+        replicate_cross_blocks = (
+            (plus[block_indices] + minus[block_indices]) / 2
+            - unforced[block_indices, None, None, :]
+        )
+        signed_replicate = _signed_components(replicate_cross_blocks)
+        for (window_name, model), (window_indices, orders) in fit_specs.items():
             for pair_index in range(len(names)):
-                bootstrap_leading[window_name, model][replicate, pair_index] = (
-                    operator @ replicate_cross[pair_index, window_indices]
-                )[0]
+                for component_index in range(2):
+                    bootstrap_leading[window_name, model][replicate, pair_index, component_index] = (
+                        crossed_block_gls_fit(
+                            signed_replicate[:, pair_index, window_indices, 2, component_index],
+                            scales[window_indices],
+                            orders,
+                        )["mean_coefficients"][0]
+                    )
+
+    joint_features = np.transpose(
+        signed_cross_blocks[:, :, :, 2, :], (0, 2, 1, 3)
+    ).reshape(len(block_ids), len(scales), -1)
+    model_comparisons = joint_crossed_block_model_comparison(
+        joint_features, scales, tuple(models.values())
+    )
 
     raw_ci = np.percentile(_signed_components(bootstrap_cross), (2.5, 97.5), axis=0)
     difference_ci = np.percentile(
@@ -1240,53 +1281,56 @@ def analyze_mixed_artifact(
         base_product = float(np.prod(base))
         for model, orders in models.items():
             for window_name, indices in windows:
-                coefficients, residuals = fitted[pair_index, window_name, model]
-                chi2 = -2 * coefficients[0] / base_product
-                hessian = 2 * chi2
-                boot_chi2 = -2 * bootstrap_leading[window_name, model][:, pair_index] / base_product
-                boot_hessian = 2 * boot_chi2
-                chi2_ci = np.percentile(_signed_components(boot_chi2), (2.5, 97.5), axis=0)
-                ci = np.percentile(_signed_components(boot_hessian), (2.5, 97.5), axis=0)
-                signed_h = _signed_components(hessian)
-                signed_chi2 = _signed_components(chi2)
-                signed_residual = _signed_components(residuals)
-                key = (pair_index, model)
-                for output_index, output in enumerate(STATE_NAMES):
-                    for component_index, component in enumerate(("cos", "sin")):
-                        previous = previous_h.get((key, output_index, component_index))
-                        previous_boot = previous_bootstrap_h.get((key, output_index, component_index))
-                        current_boot = _signed_components(boot_hessian)[:, output_index, component_index]
-                        drift_ci = (
-                            (np.nan, np.nan) if previous_boot is None else
-                            tuple(np.percentile(current_boot - previous_boot, (2.5, 97.5)))
-                        )
-                        fit_rows.append({
-                            "pair": name,
-                            "output": output,
-                            "component": component,
-                            "model": model,
-                            "orders": ";".join(str(order) for order in orders),
-                            "window": window_name,
-                            "scales": ";".join(f"{scales[index]:g}" for index in indices),
-                            "n_scales": len(indices),
-                            "residual_degrees_of_freedom": len(indices) - len(orders),
-                            "base_amplitude_product": base_product,
-                            "leading_Z_coefficient": _signed_components(coefficients[0])[output_index, component_index],
-                            "chi2": signed_chi2[output_index, component_index],
-                            "chi2_ci95_low": chi2_ci[0, output_index, component_index],
-                            "chi2_ci95_high": chi2_ci[1, output_index, component_index],
-                            "H": signed_h[output_index, component_index],
-                            "H_ci95_low": ci[0, output_index, component_index],
-                            "H_ci95_high": ci[1, output_index, component_index],
-                            "H_change_from_previous_window": (
-                                np.nan if previous is None else signed_h[output_index, component_index] - previous
-                            ),
-                            "H_change_ci95_low": drift_ci[0],
-                            "H_change_ci95_high": drift_ci[1],
-                            "residual_rmse": float(np.sqrt(np.mean(signed_residual[:, output_index, component_index] ** 2))),
-                        })
-                        previous_h[key, output_index, component_index] = signed_h[output_index, component_index]
-                        previous_bootstrap_h[key, output_index, component_index] = current_boot
+                if (window_name, model) not in fit_specs:
+                    continue
+                for component_index, component in enumerate(("cos", "sin")):
+                    fit = fitted[pair_index, window_name, model, component_index]
+                    leading = fit["mean_coefficients"][0]
+                    chi2 = -2 * leading / base_product
+                    hessian = 2 * chi2
+                    boot_chi2 = (
+                        -2 * bootstrap_leading[window_name, model][
+                            :, pair_index, component_index
+                        ] / base_product
+                    )
+                    boot_hessian = 2 * boot_chi2
+                    chi2_ci = np.percentile(boot_chi2, (2.5, 97.5))
+                    hessian_ci = np.percentile(boot_hessian, (2.5, 97.5))
+                    key = (pair_index, model, component_index)
+                    previous = previous_h.get(key)
+                    previous_boot = previous_bootstrap_h.get(key)
+                    drift_ci = (
+                        (np.nan, np.nan) if previous_boot is None else
+                        tuple(np.percentile(boot_hessian - previous_boot, (2.5, 97.5)))
+                    )
+                    fit_rows.append({
+                        "pair": name,
+                        "output": "z",
+                        "component": component,
+                        "model": model,
+                        "orders": ";".join(str(order) for order in orders),
+                        "window": window_name,
+                        "scales": ";".join(f"{scales[index]:g}" for index in indices),
+                        "n_scales": len(indices),
+                        "residual_degrees_of_freedom": len(indices) - len(orders),
+                        "base_amplitude_product": base_product,
+                        "leading_Z_coefficient": leading,
+                        "chi2": chi2,
+                        "chi2_ci95_low": chi2_ci[0],
+                        "chi2_ci95_high": chi2_ci[1],
+                        "H": hessian,
+                        "H_ci95_low": hessian_ci[0],
+                        "H_ci95_high": hessian_ci[1],
+                        "H_change_from_previous_window": (
+                            np.nan if previous is None else hessian - previous
+                        ),
+                        "H_change_ci95_low": drift_ci[0],
+                        "H_change_ci95_high": drift_ci[1],
+                        "residual_rmse": float(np.sqrt(np.mean(fit["residuals"] ** 2))),
+                        "fit_method": "crossed-block GLS",
+                    })
+                    previous_h[key] = hessian
+                    previous_bootstrap_h[key] = boot_hessian
 
     final_rows = [
         {**row, "primary": row["model"] == "lambda2_lambda4"}
@@ -1317,6 +1361,14 @@ def analyze_mixed_artifact(
     _write_rows_csv(output / "mixed_coefficient_fits.csv", fit_rows)
     _write_rows_csv(output / "mixed_final_coefficients.csv", final_rows)
     _write_rows_csv(output / "mixed_fit_stability.csv", stability)
+    _write_rows_csv(output / "mixed_joint_model_comparison.csv", [
+        {
+            **comparison,
+            "orders": ";".join(str(order) for order in comparison["orders"]),
+            "features": "xy_cos;xy_sin;xz_cos;xz_sin;yz_cos;yz_sin",
+        }
+        for comparison in model_comparisons
+    ])
     write_json_atomic(output / "mixed_analysis_summary.json", {
         "source_checkpoint": str(checkpoint_path),
         "block_count": len(block_ids),
@@ -1325,18 +1377,21 @@ def analyze_mixed_artifact(
             "seed": int(bootstrap_seed),
             "bit_generator": "PCG64DXSM",
             "replication_unit": "whole matched block",
-            "pairing": "one index draw shared across every pair, scale, mirror, output, cos and sin; P+/P- combined before fitting",
+            "pairing": "one index draw shared across unforced, every pair, scale, mirror, output, cos and sin; Z0 subtraction and P+/P- combination occur before every GLS refit",
         },
         "fourier_convention": "coefficient=cos-i*sin",
         "estimator": {
-            "Z_cross": "(Z_plus+Z_minus)/2",
+            "condition_coefficient": "per-cycle Fourier coefficients averaged over cycles to one coefficient per condition/block; cycles are not replicates",
+            "Z_cross": "(Z_plus+Z_minus)/2-Z0",
             "Z_diag_difference": "(Z_plus-Z_minus)/2 (diagnostic only)",
             "chi2": "-2*leading_lambda2_Z/(base_first*base_second)",
             "Taylor_H": "2*chi2",
             "primary_model": "Z_cross=b2*lambda^2+b4*lambda^4",
+            "fit_method": "crossed-block GLS using covariance across scales",
         },
         "final_z_coefficients": final_rows,
         "fit_window_stability": stability,
+        "joint_z_model_comparison": model_comparisons,
     })
     return output
 
@@ -1393,10 +1448,10 @@ def run_probe(config_path, resume_dir=None):
             "experiment_type": "mirrored_phase_pair",
             "convention": "mean(x exp(-i n theta)); cos = Re, sin = -Im",
             "contrast_definition": (
-                "Z_cross_raw=(Z_plus+Z_minus)/2; "
+                "Z_cross=(Z_plus+Z_minus)/2-Z0; "
                 "Z_diag_difference=(Z_plus-Z_minus)/2; "
-                "chi2_jk=-2*Z_cross_raw/(a_j*a_k); "
-                "Taylor H_jk=2*chi2_jk=-4*Z_cross_raw/(a_j*a_k)"
+                "chi2_jk=-2*b2/(base_a_j*base_a_k), where b2 is the "
+                "zero-scale leading coefficient; Taylor H_jk=2*chi2_jk"
             ),
             "condition_amplitudes": cell["condition_vectors"].tolist(),
             "condition_phases": cell["condition_phases"].tolist(),
@@ -1554,7 +1609,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        required=True,
+        default=None,
         help="external experiment configuration JSON",
     )
     parser.add_argument("--dry-run", action="store_true",
@@ -1572,6 +1627,8 @@ def main() -> None:
         )
         print(json.dumps({"mixed_analysis_dir": str(output)}, indent=2))
         return
+    if arguments.config is None:
+        parser.error("--config is required unless --analyze-artifact is used")
     runtime = initialize_execution()
     try:
         config = json.loads(arguments.config.read_text(encoding="utf-8"))

@@ -18,7 +18,6 @@ import sys
 
 import numpy as np
 from scipy import stats
-from scipy.linalg import cho_factor, cho_solve
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +30,10 @@ from lorenz.artifacts import file_sha256, verify_file_identifiers, write_json_at
 from lorenz.response import paired_order_contrasts
 from lorenz.response_plots import apply_style
 from lorenz.retention import paired_condition_indices, paired_condition_vectors
+from lorenz.strength_series import (
+    crossed_block_gls_fit,
+    joint_crossed_block_model_comparison,
+)
 
 
 DEFAULT_ARTIFACT = (
@@ -291,13 +294,6 @@ def signed_parts(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return values.real, -values.imag
 
 
-def _scaled_design(strengths, base_order: int, degree: int) -> tuple[np.ndarray, np.ndarray]:
-    scale = float(np.max(strengths))
-    powers = base_order + 2 * np.arange(degree)
-    design = np.column_stack([(strengths / scale) ** power for power in powers])
-    return design, scale**powers
-
-
 def scalar_gls_fit(
     block_values: np.ndarray,
     strengths: np.ndarray,
@@ -306,35 +302,8 @@ def scalar_gls_fit(
     degree: int,
 ) -> dict:
     """Fit one signed raw contrast using its crossed-strength block covariance."""
-    block_values = np.asarray(block_values, dtype=float)
-    strengths = np.asarray(strengths, dtype=float)
-    if block_values.shape != (block_values.shape[0], len(strengths)):
-        raise ValueError("block values must have axes block,strength")
-    covariance = np.cov(block_values, rowvar=False, ddof=1)
-    design, physical_scales = _scaled_design(strengths, base_order, degree)
-    factor = cho_factor(covariance, lower=True, check_finite=False)
-    inverse_design = cho_solve(factor, design, check_finite=False)
-    normal = design.T @ inverse_design
-    coefficient_operator = np.linalg.solve(
-        normal,
-        design.T @ cho_solve(
-            factor, np.eye(len(strengths)), check_finite=False
-        ),
-    )
-    block_coefficients = block_values @ coefficient_operator.T
-    block_coefficients = block_coefficients / physical_scales
-    mean_coefficients = block_coefficients.mean(axis=0)
-    fitted_mean = np.column_stack(
-        [strengths ** (base_order + 2 * index) for index in range(degree)]
-    ) @ mean_coefficients
-    return {
-        "block_coefficients": block_coefficients,
-        "mean_coefficients": mean_coefficients,
-        "fitted_mean": fitted_mean,
-        "intercept_weights_on_raw_contrast": (
-            coefficient_operator[0] / physical_scales[0]
-        ),
-    }
+    orders = tuple(base_order + 2 * index for index in range(degree))
+    return crossed_block_gls_fit(block_values, strengths, orders)
 
 
 def interval(values: np.ndarray, confidence: float = CONFIDENCE) -> dict:
@@ -367,64 +336,20 @@ def joint_model_comparison(
 ) -> list[dict]:
     """Global lack-of-fit comparison on symmetry-allowed signed components."""
     features = _feature_matrix(raw, pairs)
-    block_count, strength_count, feature_count = features.shape
-    mean = features.mean(axis=0).reshape(-1)
-    covariance_of_mean = np.cov(
-        features.reshape(block_count, -1), rowvar=False, ddof=1
-    ) / block_count
-    factor = cho_factor(covariance_of_mean, lower=True, check_finite=False)
-    inverse_mean = cho_solve(factor, mean, check_finite=False)
-    comparisons = []
+    strength_count = features.shape[1]
     # Retain at least one amplitude residual for a lack-of-fit statistic.
     maximum_degree = min(MAX_DEGREE, strength_count - 1)
-    for degree in range(1, maximum_degree + 1):
-        design, _ = _scaled_design(strengths, base_order, degree)
-        joint_design = np.kron(design, np.eye(feature_count))
-        inverse_design = cho_solve(
-            factor, joint_design, check_finite=False
-        )
-        coefficients = np.linalg.solve(
-            joint_design.T @ inverse_design,
-            joint_design.T @ inverse_mean,
-        )
-        residual = mean - joint_design @ coefficients
-        statistic = float(
-            residual @ cho_solve(factor, residual, check_finite=False)
-        )
-        degrees_of_freedom = int(
-            strength_count * feature_count - degree * feature_count
-        )
-        hotelling_f = (
-            (block_count - degrees_of_freedom)
-            / (degrees_of_freedom * (block_count - 1))
-            * statistic
-        )
-        comparisons.append({
-            "degree": degree,
-            "raw_powers": [base_order + 2 * index for index in range(degree)],
-            "statistic": statistic,
-            "degrees_of_freedom": degrees_of_freedom,
-            "hotelling_f": hotelling_f,
-            "f_denominator_degrees_of_freedom": block_count - degrees_of_freedom,
-            "lack_of_fit_p": float(stats.f.sf(
-                hotelling_f,
-                degrees_of_freedom,
-                block_count - degrees_of_freedom,
-            )),
-            "aic": statistic + 2 * degree * feature_count,
-        })
-    for index in range(1, len(comparisons)):
-        simpler = comparisons[index - 1]
-        current = comparisons[index]
-        difference = simpler["statistic"] - current["statistic"]
-        added = feature_count
-        improvement_f = (
-            (block_count - added) / (added * (block_count - 1)) * difference
-        )
-        current["nested_improvement_f"] = improvement_f
-        current["nested_improvement_p"] = float(
-            stats.f.sf(improvement_f, added, block_count - added)
-        )
+    comparisons = joint_crossed_block_model_comparison(
+        features,
+        strengths,
+        tuple(
+            tuple(base_order + 2 * index for index in range(degree))
+            for degree in range(1, maximum_degree + 1)
+        ),
+    )
+    for degree, comparison in enumerate(comparisons, start=1):
+        comparison["degree"] = degree
+        comparison["raw_powers"] = list(comparison.pop("orders"))
     return comparisons
 
 

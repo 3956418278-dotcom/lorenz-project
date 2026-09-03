@@ -49,8 +49,13 @@ def test_mirrored_phase_pair_recovers_sum_difference_and_mixed_factor():
     expected_normalized = np.array((1.5 - 0.25j, -2.0 + 3.0j))
     diagonal = np.array((0.3 + 0.2j, -0.4j))
     cross_raw = expected_normalized * (2.0 * 3.0)
+    baseline = np.array((7.0 - 2.0j, -3.0 + 0.5j))
     result = mirrored_phase_pair_second_order(
-        cross_raw + diagonal, cross_raw - diagonal, 2.0, 3.0
+        baseline + cross_raw + diagonal,
+        baseline + cross_raw - diagonal,
+        baseline,
+        2.0,
+        3.0,
     )
     np.testing.assert_allclose(result["cross_raw"], cross_raw)
     np.testing.assert_allclose(result["diagonal_difference"], diagonal)

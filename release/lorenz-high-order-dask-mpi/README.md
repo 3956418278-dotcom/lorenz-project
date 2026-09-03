@@ -63,8 +63,14 @@ Generated scientific artifacts are written under `outputs/`; Dask and
 Matplotlib caches are written under `runtime/cache/`. Neither location is
 inside `src/`.
 
-The mixed run performs its 300-replicate paired-block coefficient analysis
-after checkpoint completion. It can also be repeated without integration:
+After checkpoint completion, the mixed run forms
+`Z_cross=(Z_plus+Z_minus)/2-Z0` within each block and fits the scale series
+with the shared crossed-block GLS implementation.  Its primary model is
+`lambda^2+lambda^4`; pure-quadratic and sixth-order fits are retained as
+diagnostics.  Confidence intervals use 300 deterministic whole-block
+bootstrap replicates with one draw shared across the unforced condition,
+all pairs and scales, both mirrors, outputs, and cosine/sine components.
+The read-only analysis can also be repeated without integration:
 
 ```bash
 PYTHONPATH=src python -m lorenz.high_order_probe \

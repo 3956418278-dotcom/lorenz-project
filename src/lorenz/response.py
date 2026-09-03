@@ -142,7 +142,7 @@ def directional_frequency_response(
 
 
 def mirrored_phase_pair_second_order(
-    z_plus, z_minus, first_amplitude: float, second_amplitude: float
+    z_plus, z_minus, z_unforced, first_amplitude: float, second_amplitude: float
 ) -> dict[str, np.ndarray]:
     """Separate a mirrored phase pair into mixed and diagonal channels.
 
@@ -155,12 +155,13 @@ def mirrored_phase_pair_second_order(
     """
     z_plus = np.asarray(z_plus)
     z_minus = np.asarray(z_minus)
-    if z_plus.shape != z_minus.shape:
-        raise ValueError("mirrored phase-pair arrays must have equal shapes")
+    z_unforced = np.asarray(z_unforced)
+    if z_plus.shape != z_minus.shape or z_plus.shape != z_unforced.shape:
+        raise ValueError("mirrored phase-pair and unforced arrays must have equal shapes")
     amplitudes = np.asarray((first_amplitude, second_amplitude), dtype=float)
     if not np.isfinite(amplitudes).all() or np.any(amplitudes <= 0):
         raise ValueError("mixed component amplitudes must be finite and positive")
-    cross_raw = (z_plus + z_minus) / 2
+    cross_raw = (z_plus + z_minus) / 2 - z_unforced
     diagonal_difference = (z_plus - z_minus) / 2
     normalized = cross_raw / float(np.prod(amplitudes))
     return {

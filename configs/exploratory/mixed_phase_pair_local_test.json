@@ -14,21 +14,21 @@
       "yz": [2.0, 2.5]
     }
   },
-  "block_count": 3,
+  "block_count": 40,
   "workers": 1,
-  "discard_time": 1.0,
+  "discard_time": 0.1,
   "n_phase": 16,
   "harmonics": [0, 1, 2, 3, 4, 5],
   "observation_rule": {
-    "minimum_cycles": 2,
-    "minimum_physical_time": 1.0
+    "minimum_cycles": 1,
+    "minimum_physical_time": 0.1
   },
   "lorenz": {"sigma": 10.0, "rho": 28.0, "beta": 2.6666666666666665},
   "solver": {"method": "DOP853", "rtol": 1e-09, "atol": 1e-11},
   "initial_ensemble": {
     "root_entropy": 2026081603,
     "block_id_start": 9900000,
-    "spinup_time": 1.0,
+    "spinup_time": 0.1,
     "proposal": {
       "x_half_width": 20.0,
       "y_half_width": 30.0,
@@ -56,7 +56,7 @@
     "phase_samples_blocks": 0,
     "dense_trajectory_blocks": 0,
     "block_spectra": false,
-    "chunk_blocks": 3
+    "chunk_blocks": 40
   },
   "inference": {"confidence": 0.95, "fdr_alpha": 0.05},
   "generate_figures": false

@@ -6,7 +6,7 @@ from lorenz.retention import (
     condition_index,
     paired_condition_vectors,
 )
-from lorenz.strength_series import power_series_operator
+from lorenz.strength_series import crossed_block_gls_fit
 
 
 def _design():
@@ -102,18 +102,27 @@ def test_explicit_mixed_schema_builds_the_five_scale_condition_contract():
     np.testing.assert_array_equal(plan["forcing_vectors"][1], [4.0, 2.0, 0.0])
     np.testing.assert_array_equal(plan["forcing_vectors"][7], [7.0, 3.5, 0.0])
     np.testing.assert_array_equal(plan["forcing_vectors"][21], [0.0, 2.0, 2.5])
+    np.testing.assert_allclose(
+        plan["forcing_phases"][1, :2], [np.pi / 4, -np.pi / 4]
+    )
+    np.testing.assert_allclose(
+        plan["forcing_phases"][2, :2], [-np.pi / 4, np.pi / 4]
+    )
 
 
 def test_mixed_bootstrap_keeps_mirror_pairs_on_the_same_block_draw():
-    block_effect = np.arange(8, dtype=float)[:, None, None]
     signal = np.array([[2.0 + 3.0j, -1.0j]])
-    plus = signal + block_effect
-    minus = signal - block_effect
-    cross, difference = probe._paired_mirror_bootstrap_means(
-        plus, minus, resamples=40, seed=17
+    block = np.arange(8, dtype=float)[:, None]
+    unforced = block * np.array([1.0 + 0.2j, -0.5j])[None, :]
+    mirror_effect = block[:, None, :] * np.array([[[0.3, -0.2j]]])
+    plus = unforced[:, None, :] + signal + mirror_effect
+    minus = unforced[:, None, :] + signal - mirror_effect
+    cross, difference, indices = probe._paired_mirror_bootstrap_means(
+        unforced, plus, minus, resamples=40, seed=17
     )
     np.testing.assert_allclose(cross, np.broadcast_to(signal, cross.shape))
     assert np.any(np.abs(difference) > 0)
+    assert indices.shape == (40, 8)
 
 
 def test_mixed_scale_fit_and_minus_two_normalization_recover_chi2():
@@ -122,8 +131,18 @@ def test_mixed_scale_fit_and_minus_two_normalization_recover_chi2():
     expected_chi2 = 1.2 - 0.7j
     leading_z = -0.5 * base_product * expected_chi2
     values = leading_z * scales**2 + (0.3 + 0.1j) * scales**4
-    _, operator = power_series_operator(scales, (2, 4))
-    recovered_leading = (operator @ values)[0]
+    rng = np.random.default_rng(12)
+    noise = rng.normal(size=(64, len(scales)))
+    noise -= noise.mean(axis=0)
+    block_values = values + 0.01 * (noise + 1j * np.roll(noise, 1, axis=1))
+    recovered_leading = (
+        crossed_block_gls_fit(block_values.real, scales, (2, 4))[
+            "mean_coefficients"
+        ][0]
+        + 1j * crossed_block_gls_fit(block_values.imag, scales, (2, 4))[
+            "mean_coefficients"
+        ][0]
+    )
     recovered_chi2 = -2 * recovered_leading / base_product
     np.testing.assert_allclose(recovered_chi2, expected_chi2, atol=1e-13)
 
