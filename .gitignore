@@ -19,3 +19,6 @@ tmp/
 
 # personal information
 .claude/
+
+# Other-repository upgrade bundle
+for_upgrade/
