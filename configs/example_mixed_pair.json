@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "study_id": "example_mixed_pair_demo",
+  "classification": "example_demo",
+  "output_root": "outputs/example_mixed_pair",
+  "runner_path": "src/lorenz/high_order_probe.py",
+  "omega": 2.0,
+  "mixed_phase_pairs": {
+    "phase_offset": 0.7853981633974483,
+    "scales": [
+      0.5,
+      1.0,
+      1.5
+    ],
+    "base_amplitudes": {
+      "xy": [
+        1.0,
+        1.0
+      ],
+      "xz": [
+        1.0,
+        1.0
+      ],
+      "yz": [
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "block_count": 4,
+  "workers": 1,
+  "discard_time": 1.0,
+  "n_phase": 32,
+  "harmonics": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "observation_rule": {
+    "minimum_cycles": 4,
+    "minimum_physical_time": 2.0
+  },
+  "lorenz": {
+    "sigma": 10.0,
+    "rho": 28.0,
+    "beta": 2.6666666666666665
+  },
+  "solver": {
+    "method": "DOP853",
+    "rtol": 1e-09,
+    "atol": 1e-11
+  },
+  "initial_ensemble": {
+    "root_entropy": 42,
+    "block_id_start": 0,
+    "spinup_time": 1.0,
+    "proposal": {
+      "x_half_width": 20.0,
+      "y_half_width": 30.0,
+      "z_bounds": [
+        0.0,
+        50.0
+      ]
+    }
+  },
+  "protocol": {
+    "status": "example",
+    "direction_names": [
+      "xy",
+      "xz",
+      "yz"
+    ],
+    "directions": [
+      [
+        1.0,
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0,
+        1.0
+      ]
+    ],
+    "phase": 0.0
+  },
+  "retention": {
+    "per_cycle_fourier_blocks": 0,
+    "phase_samples_blocks": 0,
+    "dense_trajectory_blocks": 0,
+    "spectrum_blocks": 0,
+    "chunk_blocks": 2
+  },
+  "generate_figures": false
+}

@@ -1,0 +1,37 @@
+# Python & native build caches
+__pycache__/
+*.py[cod]
+*.so
+*.o
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Runtime & temporary directories
+.cache/
+cache/
+runtime/
+tmp/
+/_tmp_*
+*.log
+
+# Local simulation outputs, datasets, and documents
+outputs/
+results/
+data/
+*.npz
+*.npy
+*.csv
+*.mat
+*.h5
+*.parquet
+*.pdf
+*.png
+*.svg
+*.eps
+*.docx
+*.pptx
+*.tex
+*.tar.gz
+*.zip
